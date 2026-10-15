@@ -1,0 +1,36 @@
+# CI: GitHub runs this on its own machines every time someone pushes
+# or opens a pull request. If any step fails, the run turns red.
+# Results show up in the repo's "Actions" tab.
+name: ci
+
+# When to run: on every push (any branch) and on every pull request.
+on:
+  push:
+  pull_request:
+
+jobs:
+  # A job is a list of steps that run in order on one machine.
+  # We only have one for now: run the tests.
+  test:
+    # A fresh Linux machine, borrowed from GitHub and thrown away at the end.
+    # That's why we don't need a .venv here: the whole machine is isolated.
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Download our repo into the machine (it starts empty).
+      - uses: actions/checkout@v4
+
+      # 2. Install Python 3.12. "uses" = a ready-made action someone else wrote.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 3. Install the project and the test tools listed in pyproject.toml.
+      #    "run" = a normal terminal command, same as on your laptop.
+      - name: Install dependencies
+        run: pip install -e ".[test]"
+
+      # 4. Run the tests. Without TEST_DATABASE_URL the database tests
+      #    are skipped (shown as "s"); step 2 of the CI plan adds Postgres.
+      - name: Run tests
+        run: pytest -v

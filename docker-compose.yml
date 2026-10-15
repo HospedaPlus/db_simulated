@@ -1,0 +1,43 @@
+# Local F3 database + seed job.
+#   docker compose up -d postgres          start the database (schema is created on first start)
+#   docker compose run --rm seed all       seed it and run the checks
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hospedaplus-f3-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hospedaplus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hospedaplus}
+      POSTGRES_DB: ${POSTGRES_DB:-hospedaplus}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Only runs when the volume is empty (first start). Numbered so the
+      # tables exist before the indexes. reset.sql is NOT mounted on purpose.
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./sql/indexes.sql:/docker-entrypoint-initdb.d/02_indexes.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  seed:
+    build: .
+    profiles: ["seed"]          # not started by `up`; run it on demand
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Inside the compose network the host is the service name, not localhost.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hospedaplus}:${POSTGRES_PASSWORD:-hospedaplus}@postgres:5432/${POSTGRES_DB:-hospedaplus}
+      SEED_MODE: ${SEED_MODE:-dev}
+      SEED_RANDOM_SEED: ${SEED_RANDOM_SEED:-42}
+      SEED_START_DATE: ${SEED_START_DATE:-}
+      SEED_ZERO_GUESTS_RATE: ${SEED_ZERO_GUESTS_RATE:-0.02}
+      SEED_INVALID_DATES_RATE: ${SEED_INVALID_DATES_RATE:-0.02}
+    command: ["all"]
+
+volumes:
+  pgdata:
