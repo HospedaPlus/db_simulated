@@ -26,11 +26,18 @@ Same seed + same start date = the same data, row for row.
 ```bash
 cp .env.example .env              # Windows PowerShell: Copy-Item .env.example .env
 docker compose up -d postgres     # creates the tables on first start
+
 python -m venv .venv              # an isolated environment for this project
-.venv/scripts/activate         # Windows PowerShell: .\.venv\Scripts\Activate.ps1
+source .venv/bin/activate         # Windows PowerShell: .\.venv\Scripts\Activate.ps1
 pip install -e ".[test]"          # or skip the three lines above: uv sync --extra test
+
 python -m seed all                # init + seed + checks
 ```
+
+The `.venv` folder is created on each machine and never committed (it's in
+`.gitignore`): it holds binaries for your OS and Python version only.
+If PowerShell refuses to run `Activate.ps1`, allow local scripts once with
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
 Expected ending:
 
@@ -77,9 +84,17 @@ seed/safety.py ──► blocks destructive commands on remote databases
 **Reproducible.** Each table uses its own random stream derived from the
 seed, and the tables are truncated with `RESTART IDENTITY`, so ids and
 values come out the same every time. The window is
-`start_date - history` to `start_date + horizon` (dev: 14 + 30 nights,
-full: 90 + 365). The start date defaults to today so data stays current;
+`start_date - history` to `start_date + horizon` (dev: 90 + 30 nights,
+full: 400 + 180). The start date defaults to today so data stays current;
 pin `SEED_START_DATE` to reproduce an old run.
+
+**Realistic dates.** City hotels get more arrivals Sunday to Tuesday
+(business trips), resorts on Friday and Saturday (getaways), and high season
+brings more guests than low season. Corporate guests stay 1 to 3 nights and
+book late; resort guests book further ahead. A future booking is only kept
+if it would already have been made by today, so occupancy drops the further
+ahead you look, as in a real booking curve. All these habits live in one
+block at the top of `seed/generator.py` and are easy to tune.
 
 **Idempotent.** `seed` replaces the data instead of appending, inside one
 transaction: run it ten times and you get one copy; if it fails half way,
@@ -174,5 +189,9 @@ docker-compose.yml, .env.example, .github/workflows/ci.yml
 - **`Tables are missing`**: run `python -m seed init`.
 - **Changed `schema.sql` but nothing changed**: `IF NOT EXISTS` skips
   existing tables. Run `python -m seed reset` and then `python -m seed all`.
+- **`Permission denied` on `sql\schema.sql`, or "is a folder, not a file"**:
+  Docker created empty folders because the SQL files weren't there when the
+  container first started. Run `docker compose down -v`, delete the folders,
+  copy the real files back and start again.
 - **`Refusing to ... on remote host`**: working as intended; add
   `--allow-remote` only if you mean it.

@@ -50,8 +50,8 @@ class Mode:
 
 
 MODES = {
-    "dev": Mode("dev", history_days=14, horizon_days=30, guests=6_000),
-    "full": Mode("full", history_days=90, horizon_days=365, guests=60_000),
+    "dev": Mode("dev", history_days=90, horizon_days=30, guests=40_000),
+    "full": Mode("full", history_days=400, horizon_days=180, guests=100_000),
 }
 
 

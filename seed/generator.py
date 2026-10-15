@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
+from itertools import accumulate
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -25,12 +26,28 @@ NO_SHOW_RATE_PAST = 0.03
 CANCEL_RATE_FUTURE = 0.25    # some future cancellations haven't happened yet
 REFUNDABLE_SHARE = 0.75
 
+# Booking habits per segment. Simulated values: tune them freely.
+# Business travellers stay short and book late; resort guests stay longer
+# and plan ahead.
 NIGHTS = {
-    "urban":  ([1, 2, 3, 4, 5, 6, 7], [30, 30, 20, 10, 5, 3, 2]),
-    "resort": ([2, 3, 4, 5, 6, 7], [15, 25, 25, 15, 10, 10]),
+    "urban":     ([1, 2, 3, 4, 5, 6, 7], [30, 30, 20, 10, 5, 3, 2]),
+    "resort":    ([2, 3, 4, 5, 6, 7], [15, 25, 25, 15, 10, 10]),
+    "corporate": ([1, 2, 3], [45, 35, 20]),
 }
-LEAD_DAYS = ([0, 3, 7, 14, 30, 60, 120], [8, 12, 15, 20, 20, 15, 10])
+LEAD_DAYS = {  # days between booking and arrival (+0..6 days of jitter)
+    "urban":     ([0, 3, 7, 14, 30, 60, 120], [10, 15, 20, 20, 18, 12, 5]),
+    "resort":    ([3, 7, 14, 30, 60, 90, 150], [5, 8, 12, 20, 25, 18, 12]),
+    "corporate": ([0, 1, 3, 7, 14, 21], [20, 25, 25, 15, 10, 5]),
+}
 
+# How likely each arrival day is. City hotels fill with business trips that
+# start Sunday to Tuesday; resorts fill with weekend getaways.
+ARRIVAL_WEEKDAY = {  # Monday .. Sunday
+    "urban":  [1.3, 1.2, 1.0, 0.8, 0.7, 0.6, 1.0],
+    "resort": [0.6, 0.6, 0.7, 1.0, 1.5, 1.4, 0.8],
+}
+# More people travel in high season, fewer in low season.
+SEASON_DEMAND = {"LOW": 0.75, "MID": 1.0, "HIGH": 1.4}
 
 @dataclass
 class Dataset:
@@ -146,8 +163,15 @@ def generate(settings: Settings) -> Dataset:
     max_guests = {rt_index[rt.code]: rt.max_guests for rt in catalog.ROOM_TYPES}
     hotel_ids = list(range(1, len(catalog.HOTELS) + 1))
     hotel_w = [h.rooms for h in catalog.HOTELS]
-    f3_channels = list(catalog.F3_CHANNEL_WEIGHTS)
-    f3_w = list(catalog.F3_CHANNEL_WEIGHTS.values())
+    # Arrival-day weights per hotel (weekday x season), as running totals so
+    # each pick is a quick binary search even with a year of nights.
+    arrival_cum = {
+        hotel_id: list(accumulate(
+            ARRIVAL_WEEKDAY[h.category][d.weekday()] * SEASON_DEMAND[catalog.season_for(d, h.country)]
+            for d in days))
+        for hotel_id, h in enumerate(catalog.HOTELS, start=1)
+    }
+    day_idx = list(range(len(days))) 
 
     room_nights = catalog.TOTAL_ROOMS * len(days)
     attempts = int(room_nights * TARGET_F3_OCCUPANCY / (2.9 * (1 - CANCEL_RATE_PAST)))
@@ -157,10 +181,13 @@ def generate(settings: Settings) -> Dataset:
         h = catalog.HOTELS[hotel_id - 1]
         rt_ids = [rt_index[rt.code] for rt in catalog.ROOM_TYPES]
         rt_id = rng.choices(rt_ids, [rooms_by_type[(hotel_id, r)] for r in rt_ids])[0]
-        nights = rng.choices(*NIGHTS[h.category])[0]
-        if nights >= len(days):
-            continue
-        first_idx = rng.randrange(0, len(days) - nights)
+        channels = catalog.F3_CHANNEL_WEIGHTS[h.category]
+        channel = rng.choices(list(channels), list(channels.values()))[0]
+        segment = "corporate" if channel == "corporate" else h.category
+        nights = rng.choices(*NIGHTS[segment])[0]
+        first_idx = rng.choices(day_idx, cum_weights=arrival_cum[hotel_id])[0]
+        if first_idx + nights > len(days):
+            continue  # the stay would run past the last night we track
         check_in = days[first_idx]
         check_out = check_in + timedelta(days=nights)
         rooms_count = 2 if rng.random() < 0.08 else 1
@@ -169,17 +196,16 @@ def generate(settings: Settings) -> Dataset:
         adults = rng.randint(1, capacity)
         children = rng.randint(0, capacity - adults) if adults < capacity and rng.random() < 0.4 else 0
         infants = 1 if rng.random() < 0.05 else 0
-
-        channel = rng.choices(f3_channels, f3_w)[0]
+        
         guest_id = rng.randint(1, len(ds.guests))
 
         # Booked `lead` days before arrival, at some minute of that day, in the
         # hotel's own time zone: nobody can book a night that already passed.
-        lead = rng.choices(*LEAD_DAYS)[0] + rng.randint(0, 6)
+        lead = rng.choices(*LEAD_DAYS[segment])[0] + rng.randint(0, 6)
         created = (datetime.combine(check_in - timedelta(days=lead), time(0, 0), tzinfo=ZoneInfo(h.timezone))
                    + timedelta(minutes=rng.randint(0, 24 * 60 - 1))).astimezone(timezone.utc)
         if created > as_of:
-            created = as_of - timedelta(minutes=rng.randint(1, 7 * 24 * 60))
+            continue  # that booking hasn't been made yet: far-off nights fill up over time
 
         # Status depends on whether the stay is already in the past.
         roll = rng.random()

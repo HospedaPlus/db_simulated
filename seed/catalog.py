@@ -150,8 +150,13 @@ CHANNELS = [
 
 # Channels that book through our own engine and therefore land in F3.
 # OTA and agency bookings arrive through F2 and F4 instead.
-F3_CHANNEL_WEIGHTS = {"direct_web": 0.8, "corporate": 0.2}
+F3_CHANNEL_WEIGHTS = {
+    "urban":  {"direct_web": 0.75, "corporate": 0.25},
+    "resort": {"direct_web": 0.92, "corporate": 0.08},
+}
+
 CORPORATE_DISCOUNT = 0.90  # negotiated corporate rate (RN-02)
+# Corporate agreements are mostly for city hotels.
 
 
 # Small name pools for fake guests. Kept in the repo instead of using a
