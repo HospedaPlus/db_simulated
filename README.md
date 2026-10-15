@@ -1,4 +1,4 @@
-# HospedaPlus F3 database (US-23)
+# HospedaPlus F3 database 
 
 The simulated operational database of HospedaPlus' own booking engine
 (source **F3** in the project statement): schema, a reproducible seed and
