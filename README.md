@@ -147,6 +147,34 @@ The database tests also prove that 50 concurrent buyers of the last room
 produce exactly one sale. CI (`.github/workflows/ci.yml`) runs everything
 against a PostgreSQL service on every push.
 
+## Shared database (Neon)
+
+The team's shared F3 database runs on Neon (managed PostgreSQL 16). It was
+loaded in `full` mode and verified with `python -m seed check` (20/20).
+
+| | |
+|---|---|
+| Provider | Neon, project `hospedaplus_database`, branch `production` |
+| Region | AWS US East (Ohio), `aws-us-east-2` |
+| Database | `hospedaplus` |
+| Connection | direct host (no `-pooler`) for the seed; the `-pooler` host suits the API |
+| Credentials | ask the team; never commit them |
+| Last full load | 2026-10-15 |
+
+Point a single terminal at it (PowerShell shown), then go back to local:
+
+```powershell
+$env:DATABASE_URL = "postgresql://<role>:<password>@<endpoint>.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require&channel_binding=require"
+python -m seed check             # read-only, safe to run any time
+Remove-Item Env:DATABASE_URL     # back to your local database
+```
+
+- Re-seeding replaces everyone's data: agree with the team first, then
+  `python -m seed seed --mode full --allow-remote`.
+- Never run `pytest` against it: the database tests wipe their database
+  (and `tests/conftest.py` refuses non-local URLs anyway).
+- Setup, costs, limits and the EC2 job: see `DEPLOYMENT.md`.
+
 ## How it fits the project
 
 ```
