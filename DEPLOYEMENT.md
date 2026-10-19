@@ -12,7 +12,7 @@ the code is Neon-specific.
 | Data | `full` mode, loaded 2026-10-15 from a laptop, **old catalog**: reload to move to shared catalog 1.0.0 |
 | Health | `python -m seed check`: 20/20 passed (21 checks after the reload) |
 
-![Health evidence](image.png)
+![alt text](image.png)
 
 ## How it was set up
 
