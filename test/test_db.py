@@ -89,8 +89,10 @@ def test_cannot_book_a_night_that_already_passed(seeded):
     """A new booking (created_at = now) can't start yesterday; today is fine."""
     insert = """INSERT INTO reservations (code, hotel_id, room_type_id, channel_id, guest_id,
                     check_in, check_out, adults, currency, first_night_amount, total_amount)
-                SELECT %s, 1, 1, 1, 1, d, d + 1, 1, 'COP', 100000, 100000
-                FROM (SELECT (now() AT TIME ZONE 'America/Bogota')::date + %s AS d) x"""
+                SELECT %s, h.id, 1, 1, 1, d, d + 1, 1, h.currency, 100000, 100000
+                FROM hotels h,
+                     LATERAL (SELECT (now() AT TIME ZONE h.timezone)::date + %s AS d) x
+                WHERE h.code = 'HP-CO-001'"""
     with psycopg.connect(seeded.database_url) as conn:
         with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
             conn.execute(insert, ("TEST-YESTERDAY", -1))

@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS room_types (
 
 CREATE TABLE IF NOT EXISTS hotels (
     id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    code VARCHAR(12)  NOT NULL,          -- hotel-001 ... hotel-028
+    code VARCHAR(12)  NOT NULL,          -- HP-CO-001 ... (shared catalog)
     name  VARCHAR(120) NOT NULL,
     category VARCHAR(10)  NOT NULL,          -- urban or resort (statement: urban + vacation hotels)
     city  VARCHAR(80)  NOT NULL,

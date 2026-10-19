@@ -5,7 +5,8 @@ The simulated operational database of HospedaPlus' own booking engine
 health checks, so every other component can build and test against the
 same data.
 
-- 28 hotels (26 in Colombia, 2 in Portugal) and exactly 4,000 rooms
+- 28 hotels in 5 countries (Colombia, Mexico, Brazil, Portugal, Spain) and exactly
+  4,000 rooms, read from the **shared catalog** every source uses
 - room types, channels with RN-02 commissions, seasonal rates (RN-05)
 - daily inventory per hotel and room type, **no overbooking**
 - direct and corporate reservations, with cancellations and no-shows
@@ -44,7 +45,7 @@ Expected ending:
 ```
   PASS  inventory available = total - sold  none found
   ...
-  20/20 checks passed
+  21/21 checks passed
 ```
 
 No Python on your machine? Run the seed in a container instead:
@@ -74,7 +75,8 @@ Everything can also come from `.env` (see `.env.example`):
 sql/schema.sql ──► tables, keys, constraints      ┐
 sql/indexes.sql ─► secondary indexes              ├─ python -m seed init
                                                   ┘
-seed/catalog.py ─► fixed hotels, room types, channels, prices
+catalog/catalog.json ► shared catalog: hotels, room types, channels, seasons
+seed/catalog.py ─► loads it + F3-only prices and guest names
 seed/generator.py ► builds every row in memory from the seed
 seed/db.py ──────► TRUNCATE + COPY in one transaction
 seed/checks.py ──► health and integrity checks, fingerprints
@@ -124,6 +126,7 @@ would break the constraints, so they go to `reservation_anomalies`
 
 - connectivity and server version; all 9 tables present
 - counts: 28 hotels, 4,000 rooms, 4 room types, 21 channels, data in the rest
+- hotels, channels and room types identical to the shared catalog version
 - no orphan rooms or reservations
 - inventory total = physical rooms; available = total − room-nights sold
 - every night has exactly one rate; rates and bookings use the hotel's currency
@@ -150,7 +153,7 @@ against a PostgreSQL service on every push.
 ## Shared database (Neon)
 
 The team's shared F3 database runs on Neon (managed PostgreSQL 16). It was
-loaded in `full` mode and verified with `python -m seed check` (20/20).
+loaded in `full` mode and verified with `python -m seed check`.
 
 | | |
 |---|---|
@@ -185,9 +188,13 @@ F5 reviews API ─────────────┤
 F1 Kaggle, F6, F7 APIs ─────┘
 ```
 
-- **Shared catalog.** Hotel codes `hotel-001..hotel-028`, room types
-  `SINGLE/DOUBLE/TWIN/SUITE`, OTA codes and agencies `AG01..AG15` are the
-  ones the F2/F4/F5 simulators already use, so the pipeline can join them.
+- **Shared catalog.** `catalog/catalog.json` is a pinned copy of the
+  HospedaPlus shared catalog (version in the file): hotel codes
+  `HP-CO-001`…, room types `SINGLE/DOUBLE/TWIN/SUITE`, channels with their
+  RN-02 commission, currency per country and RN-05 seasons. F2, F4 and F5
+  read the same file, so the pipeline can join every source. Never edit the
+  copy: change the shared catalog, publish a new version and copy it here
+  (`seed check` fails if Neon and the file disagree).
 - **Booking API (FastAPI).** Reads availability and rates from `inventory`
   and `rates`; sells with a single conditional `UPDATE` (see the
   concurrency test) to stay within the no-overbooking rule.
@@ -201,9 +208,10 @@ F1 Kaggle, F6, F7 APIs ─────┘
 ## Files
 
 ```
+catalog/        catalog.json (pinned copy of the shared catalog)
 sql/            schema.sql, indexes.sql, reset.sql
 seed/           Python package (python -m seed)
-tests/          unit + database tests
+test/           unit + database tests
 docs/           data_model.md (ERD and table guide)
 DEPLOYMENT.md   AWS RDS / Supabase deployment
 Dockerfile      seed job image (local and ECS Fargate)

@@ -23,17 +23,31 @@ def test_catalog_matches_the_statement(settings):
     assert len(ds.hotels) == 28
     assert len(ds.rooms) == 4000
     countries = Counter(h[4] for h in ds.hotels)
-    assert countries == {"CO": 26, "PT": 2}  # F1 history = the two Portuguese hotels
+    assert countries == {"CO": 10, "MX": 6, "BR": 6, "PT": 3, "ES": 3}
 
 
-def test_codes_match_the_other_simulators(settings):
-    # F2/F4/F5 use these exact codes; if this fails, their joins break.
+def test_hotels_come_from_the_shared_catalog(settings):
+    # F2/F4/F5 read the same catalog.json; if this fails, their joins break.
+    import json
+
+    shared = json.loads(catalog.CATALOG_PATH.read_text(encoding="utf-8"))
     ds = generate(settings)
-    assert [h[0] for h in ds.hotels] == [f"hotel-{i:03d}" for i in range(1, 29)]
+    assert [h[0] for h in ds.hotels] == [h["code"] for h in shared["hotels"]]
     assert [rt[0] for rt in ds.room_types] == ["SINGLE", "DOUBLE", "TWIN", "SUITE"]
-    codes = {c[0] for c in ds.channels}
-    assert {"booking_channel_a", "booking_channel_b", "expedia", "direct_ota"} <= codes
-    assert {f"AG{i:02d}" for i in range(1, 16)} <= codes
+    assert {c[0] for c in ds.channels} == {c["code"] for c in shared["channels"]}
+    by_code = {h["code"]: h for h in shared["hotels"]}
+    for code, _name, _cat, _city, country, tz, currency, *_ in ds.hotels:
+        assert (country, tz, currency) == (by_code[code]["country"], by_code[code]["timezone"],
+                                           by_code[code]["currency"])
+
+
+def test_f1_hotels_are_the_portuguese_pair(settings):
+    # The Kaggle history (F1) belongs to one city hotel and one resort in Portugal.
+    import json
+
+    shared = json.loads(catalog.CATALOG_PATH.read_text(encoding="utf-8"))
+    f1 = {h["code"]: h["f1_profile"] for h in shared["hotels"] if "f1_profile" in h}
+    assert f1 == {"HP-PT-001": "City Hotel", "HP-PT-002": "Resort Hotel"}
 
 
 def test_commissions_follow_rn02(settings):
@@ -91,11 +105,28 @@ def test_defect_rates_are_configurable(settings):
 
 def test_prices_follow_season_multipliers(settings):
     ds = generate(settings)
-    # Hotel 1 (Bogota, urban, factor 1.10) DOUBLE in LOW season.
-    low = [r for r in ds.rates if r[0] == 1 and r[1] == 2 and r[2] == "LOW"][0]
+    # HP-CO-005 (Bogota, urban, factor 1.10) DOUBLE in LOW season (CO: Sep-Nov).
+    hotel_id = [h[0] for h in ds.hotels].index("HP-CO-005") + 1
+    low = [r for r in ds.rates if r[0] == hotel_id and r[1] == 2 and r[2] == "LOW"][0]
     expected = round(catalog.BASE_RATES["COP"]["DOUBLE"] * 1.10 * 0.85, -3)
     assert low[6] == expected
     assert date(2026, 10, 14) >= low[3]
+
+
+def test_every_hotel_sells_in_its_country_currency(settings):
+    ds = generate(settings)
+    currency = {"CO": "COP", "MX": "MXN", "BR": "BRL", "PT": "EUR", "ES": "EUR"}
+    assert all(h[6] == currency[h[4]] for h in ds.hotels)
+
+
+def test_seasons_follow_each_country(settings):
+    # Brazil is in the southern hemisphere: January is high season there,
+    # while in Spain it is low season after Epiphany.
+    assert catalog.season_for(date(2027, 1, 20), "BR") == "HIGH"
+    assert catalog.season_for(date(2027, 1, 20), "ES") == "LOW"
+    assert catalog.season_for(date(2026, 12, 31), "CO") == "HIGH"
+    assert catalog.season_for(date(2026, 10, 1), "MX") == "LOW"
+    assert catalog.season_for(date(2026, 5, 10), "PT") == "MID"
 
 
 def test_no_booking_starts_before_it_was_made(settings):
