@@ -108,7 +108,8 @@ def test_prices_follow_season_multipliers(settings):
     # HP-CO-005 (Bogota, urban, factor 1.10) DOUBLE in LOW season (CO: Sep-Nov).
     hotel_id = [h[0] for h in ds.hotels].index("HP-CO-005") + 1
     low = [r for r in ds.rates if r[0] == hotel_id and r[1] == 2 and r[2] == "LOW"][0]
-    expected = round(catalog.BASE_RATES["COP"]["DOUBLE"] * 1.10 * 0.85, -3)
+    low_multiplier = catalog.SEASON_MULTIPLIER["LOW"]  # from the shared catalog
+    expected = round(catalog.BASE_RATES["COP"]["DOUBLE"] * 1.10 * low_multiplier, -3)
     assert low[6] == expected
     assert date(2026, 10, 14) >= low[3]
 
@@ -136,3 +137,10 @@ def test_no_booking_starts_before_it_was_made(settings):
     tz = {i: ZoneInfo(h[5]) for i, h in enumerate(ds.hotels, start=1)}
     for r in ds.reservations:
         assert r[5] >= r[16].astimezone(tz[r[1]]).date()
+
+
+def test_season_multipliers_come_from_the_shared_catalog():
+    import json
+
+    shared = json.loads(catalog.CATALOG_PATH.read_text(encoding="utf-8"))
+    assert catalog.SEASON_MULTIPLIER == shared["pricing_rules"]["season_multipliers"]

@@ -1,5 +1,5 @@
 {
-  "catalog_version": "1.0.0",
+  "catalog_version": "1.1.0",
   "description": "Shared reference data of HospedaPlus Hotels. Every source (F2-F5) and the data platform use these codes. Owner: db_simulated (F3).",
   "countries": [
     {
@@ -338,6 +338,21 @@
           "03-31"
         ]
       ]
+    }
+  },
+  "pricing_rules": {
+    "_comment": "Business rules from the statement. Every price calculation (F3 seed, hourly pricing job, Silver/Gold) reads them from here.",
+    "season_multipliers": {
+      "LOW": 0.85,
+      "MID": 1.0,
+      "HIGH": 1.25
+    },
+    "event_multiplier": 1.15,
+    "pickup": {
+      "window_days": 14,
+      "threshold_pct": 15,
+      "above_multiplier": 1.1,
+      "below_multiplier": 0.92
     }
   },
   "hotels": [

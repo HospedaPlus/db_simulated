@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS rooms (
 );
 
 -- One row per hotel, room type and season period.
--- amount = base rate x season multiplier (RN-05: LOW 0.85, MID 1.00, HIGH 1.25).
+-- amount = base rate x season multiplier (RN-05, values in catalog/catalog.json).
 -- Pickup and event multipliers (RN-05/RN-06) are applied later by the pricing service.*/
 CREATE TABLE IF NOT EXISTS rates (
     id  INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

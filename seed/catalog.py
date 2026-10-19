@@ -81,8 +81,8 @@ BASE_RATES = {
 }
 RESORT_FACTOR = 1.15
 
-# RN-05 season multipliers.
-SEASON_MULTIPLIER = {"LOW": 0.85, "MID": 1.00, "HIGH": 1.25}
+# RN-05 season multipliers, shared with every price calculation.
+SEASON_MULTIPLIER: dict[str, float] = _CATALOG["pricing_rules"]["season_multipliers"]
 
 
 def _season_table() -> dict[str, dict[tuple[int, int], str]]:
