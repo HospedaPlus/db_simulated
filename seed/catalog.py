@@ -1,18 +1,28 @@
-"""Fixed reference data: hotels, room types, channels and prices.
+"""Reference data: hotels, room types, channels, seasons and prices.
 
-Nothing here is random. Codes match the other simulators in the team
-repo (F2 events, F4 agency files, F5 reviews all use hotel-001..hotel-028
-and SINGLE/DOUBLE/TWIN/SUITE), so a hotel or room type means the same
-thing in every source. Change a code here and you break their joins.
+The shared part (hotels, room types, channels, seasons) is read from
+catalog/catalog.json, a pinned copy of the HospedaPlus shared catalog. F2,
+F4 and F5 read the same file, so a hotel or room type means the same thing
+in every source. Never edit the copy here: change the shared catalog,
+publish a new version and copy it in.
 
-The chain: 26 hotels in Colombia (sold in COP) plus the 2 Portuguese
-hotels behind the Kaggle history F1 (sold in EUR), as the statement says.
+What only F3 needs to generate data (base prices, price level per hotel,
+guest names) stays in this module.
 """
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
+
+from .config import ROOT
+
+CATALOG_PATH = Path(os.getenv("HOSPEDAPLUS_CATALOG", ROOT / "catalog" / "catalog.json"))
+_CATALOG = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+CATALOG_VERSION: str = _CATALOG["catalog_version"]
 
 
 @dataclass(frozen=True)
@@ -22,12 +32,7 @@ class RoomType:
     max_guests: int
 
 
-ROOM_TYPES = [
-    RoomType("SINGLE", "Single room", 1),
-    RoomType("DOUBLE", "Double room", 2),
-    RoomType("TWIN", "Twin room", 2),
-    RoomType("SUITE", "Suite", 4),
-]
+ROOM_TYPES = [RoomType(r["code"], r["name"], r["max_guests"]) for r in _CATALOG["room_types"]]
 
 
 @dataclass(frozen=True)
@@ -43,45 +48,20 @@ class Hotel:
     price_factor: float  # how pricey the destination is vs. the chain average
 
 
-_CO = ("CO", "America/Bogota", "COP")
-_PT = ("PT", "Europe/Lisbon", "EUR")
-
-# (name, category, city, country info, rooms, price factor)
-_HOTELS = [
-    ("HospedaPlus Chapinero",           "urban",  "Bogota",          _CO, 210, 1.10),
-    ("HospedaPlus Usaquen",             "urban",  "Bogota",          _CO, 180, 1.10),
-    ("HospedaPlus Centro Internacional", "urban", "Bogota",          _CO, 190, 1.05),
-    ("HospedaPlus Aeropuerto El Dorado", "urban", "Bogota",          _CO, 160, 1.00),
-    ("HospedaPlus Zona T",              "urban",  "Bogota",          _CO, 160, 1.15),
-    ("HospedaPlus El Poblado",          "urban",  "Medellin",        _CO, 160, 1.10),
-    ("HospedaPlus Laureles",            "urban",  "Medellin",        _CO, 140, 1.00),
-    ("HospedaPlus Ciudad del Rio",      "urban",  "Medellin",        _CO, 150, 1.05),
-    ("HospedaPlus Guatape",             "resort", "Guatape",         _CO,  90, 1.00),
-    ("HospedaPlus Granada",             "urban",  "Cali",            _CO, 150, 0.95),
-    ("HospedaPlus Ciudad Jardin",       "urban",  "Cali",            _CO, 130, 0.95),
-    ("HospedaPlus Barranquilla Norte",  "urban",  "Barranquilla",    _CO, 160, 0.95),
-    ("HospedaPlus Puerto Colombia",     "resort", "Puerto Colombia", _CO, 110, 0.95),
-    ("HospedaPlus Bocagrande",          "resort", "Cartagena",       _CO, 190, 1.25),
-    ("HospedaPlus Centro Historico",    "urban",  "Cartagena",       _CO, 120, 1.30),
-    ("HospedaPlus Manzanillo",          "resort", "Cartagena",       _CO, 180, 1.20),
-    ("HospedaPlus El Rodadero",         "resort", "Santa Marta",     _CO, 170, 1.05),
-    ("HospedaPlus Santa Marta Centro",  "urban",  "Santa Marta",     _CO, 100, 1.00),
-    ("HospedaPlus San Andres",          "resort", "San Andres",      _CO, 200, 1.25),
-    ("HospedaPlus Sound Bay",           "resort", "San Andres",      _CO, 120, 1.20),
-    ("HospedaPlus Cabecera",            "urban",  "Bucaramanga",     _CO, 130, 0.90),
-    ("HospedaPlus Pereira",             "urban",  "Pereira",         _CO, 110, 0.90),
-    ("HospedaPlus Salento",             "resort", "Salento",         _CO,  80, 0.95),
-    ("HospedaPlus Villa de Leyva",      "resort", "Villa de Leyva",  _CO,  70, 1.00),
-    ("HospedaPlus Manizales",           "urban",  "Manizales",       _CO, 100, 0.90),
-    ("HospedaPlus Cucuta",              "urban",  "Cucuta",          _CO, 110, 0.85),
-    # The two F1 (Kaggle) hotels: one city hotel and one resort in Portugal.
-    ("HospedaPlus Lisboa",              "urban",  "Lisbon",          _PT, 180, 1.00),
-    ("HospedaPlus Algarve",             "resort", "Algarve",         _PT, 150, 1.00),
-]
+# F3-only: price level of each destination (1.00 = chain average).
+PRICE_FACTORS = {
+    "HP-CO-002": 1.25, "HP-CO-003": 1.30, "HP-CO-009": 1.20, "HP-CO-005": 1.10,
+    "HP-CO-010": 0.90, "HP-CO-008": 0.95,
+    "HP-MX-001": 1.25, "HP-MX-006": 1.30, "HP-MX-002": 1.15, "HP-MX-003": 1.10,
+    "HP-BR-001": 1.20, "HP-BR-002": 1.10, "HP-BR-006": 0.90,
+    "HP-ES-002": 1.15, "HP-ES-001": 1.10, "HP-ES-003": 1.05,
+    "HP-PT-001": 1.00, "HP-PT-002": 1.00, "HP-PT-003": 0.95,
+}
 
 HOTELS = [
-    Hotel(f"hotel-{i:03d}", name, cat, city, c[0], c[1], c[2], rooms, factor)
-    for i, (name, cat, city, c, rooms, factor) in enumerate(_HOTELS, start=1)
+    Hotel(h["code"], h["name"], h["category"], h["city"], h["country"], h["timezone"],
+          h["currency"], h["rooms"], PRICE_FACTORS.get(h["code"], 1.00))
+    for h in _CATALOG["hotels"]
 ]
 
 TOTAL_ROOMS = sum(h.rooms for h in HOTELS)  # 4,000
@@ -92,33 +72,47 @@ ROOM_MIX = {
     "resort": {"SINGLE": 0.05, "DOUBLE": 0.50, "TWIN": 0.30, "SUITE": 0.15},
 }
 
-# Nightly base rate per room before season and destination factors.
+# F3-only: nightly base rate per room before season and destination factors.
 BASE_RATES = {
     "COP": {"SINGLE": 240_000, "DOUBLE": 320_000, "TWIN": 330_000, "SUITE": 680_000},
+    "MXN": {"SINGLE": 1_300, "DOUBLE": 1_700, "TWIN": 1_750, "SUITE": 3_600},
+    "BRL": {"SINGLE": 380, "DOUBLE": 500, "TWIN": 520, "SUITE": 1_050},
     "EUR": {"SINGLE": 90, "DOUBLE": 120, "TWIN": 125, "SUITE": 260},
 }
 RESORT_FACTOR = 1.15
 
-# RN-05 season multipliers.
-SEASON_MULTIPLIER = {"LOW": 0.85, "MID": 1.00, "HIGH": 1.25}
+# RN-05 season multipliers, shared with every price calculation.
+SEASON_MULTIPLIER: dict[str, float] = _CATALOG["pricing_rules"]["season_multipliers"]
+
+
+def _season_table() -> dict[str, dict[tuple[int, int], str]]:
+    """(month, day) -> season for every country, from the catalog ranges."""
+    table: dict[str, dict[tuple[int, int], str]] = {}
+    for country, seasons in _CATALOG["seasons"].items():
+        if country.startswith("_"):
+            continue
+        days: dict[tuple[int, int], str] = {}
+        for name, ranges in seasons.items():
+            for start, end in ranges:
+                s = (int(start[:2]), int(start[3:]))
+                e = (int(end[:2]), int(end[3:]))
+                for m in range(1, 13):
+                    for d in range(1, 32):
+                        md = (m, d)
+                        inside = s <= md <= e if s <= e else (md >= s or md <= e)
+                        if inside:
+                            days[md] = name
+        table[country] = days
+    return table
+
+
+_SEASONS = _season_table()
 
 
 def season_for(day: date, country: str) -> str:
-    """Rough tourist calendar per country. Good enough for simulated
-    prices; holidays and events are added later by F6, not here."""
-    md = (day.month, day.day)
-    if country == "PT":
-        if (6, 15) <= md <= (9, 15) or md >= (12, 20) or md <= (1, 5):
-            return "HIGH"
-        if md >= (11, 1) or md <= (3, 31):
-            return "LOW"
-        return "MID"
-    # Colombia: year-end and mid-year school holidays are the peaks.
-    if md >= (12, 15) or md <= (1, 15) or (6, 15) <= md <= (7, 31):
-        return "HIGH"
-    if (2, 1) <= md <= (3, 15) or (9, 1) <= md <= (11, 30):
-        return "LOW"
-    return "MID"
+    """RN-05 season of a day in a country; days not listed are MID.
+    Holidays and events are added later by F6, not here."""
+    return _SEASONS[country].get((day.month, day.day), "MID")
 
 
 @dataclass(frozen=True)
@@ -129,24 +123,9 @@ class Channel:
     commission_pct: float
 
 
-# RN-02 commissions: OTA 18%, traditional agency 10%, corporate 0%, direct 0%.
-# OTA codes are the ones the F2 simulator emits; AG01..AG15 are the
-# agencies of the F4 simulator (their booking ids start with these codes).
-_AGENCIES = [
-    "ViajaFacil", "SolyMar Tours", "EuroTrip Agency", "Andes Travel",
-    "GlobalStay Agency", "CaribeViajes", "MontanaTours", "CostaBella Travel",
-    "NorteSur Agencia", "Horizonte Viajes", "Rutas del Sur", "BlueSky Agency",
-    "Destino Feliz", "Puerta del Sol Travel", "Viajes Amanecer",
-]
-
-CHANNELS = [
-    Channel("direct_web", "HospedaPlus website", "direct", 0),
-    Channel("corporate", "Corporate agreements", "corporate", 0),
-    Channel("booking_channel_a", "OTA channel A", "ota", 18),
-    Channel("booking_channel_b", "OTA channel B", "ota", 18),
-    Channel("expedia", "Expedia", "ota", 18),
-    Channel("direct_ota", "OTA direct connect", "ota", 18),
-] + [Channel(f"AG{i:02d}", name, "agency", 10) for i, name in enumerate(_AGENCIES, start=1)]
+# RN-02 commissions come with each channel in the shared catalog:
+# OTA 18% (F2), traditional agency 10% (F4: AG01..AG15), direct and corporate 0%.
+CHANNELS = [Channel(c["code"], c["name"], c["type"], c["commission_pct"]) for c in _CATALOG["channels"]]
 
 # Channels that book through our own engine and therefore land in F3.
 # OTA and agency bookings arrive through F2 and F4 instead.
@@ -155,8 +134,8 @@ F3_CHANNEL_WEIGHTS = {
     "resort": {"direct_web": 0.92, "corporate": 0.08},
 }
 
-CORPORATE_DISCOUNT = 0.90  # negotiated corporate rate (RN-02)
 # Corporate agreements are mostly for city hotels.
+CORPORATE_DISCOUNT = 0.90  # negotiated corporate rate (RN-02)
 
 
 # Small name pools for fake guests. Kept in the repo instead of using a
@@ -187,8 +166,8 @@ NAME_POOLS = {
 
 # Where guests come from: (country, name pool, weight).
 GUEST_ORIGINS = [
-    ("CO", "es", 0.62), ("US", "en", 0.10), ("MX", "es", 0.05), ("ES", "es", 0.05),
-    ("PT", "pt", 0.06), ("BR", "pt", 0.05), ("GB", "en", 0.04), ("CA", "en", 0.03),
+    ("CO", "es", 0.28), ("MX", "es", 0.18), ("BR", "pt", 0.18), ("ES", "es", 0.08),
+    ("PT", "pt", 0.06), ("US", "en", 0.12), ("GB", "en", 0.05), ("CA", "en", 0.05),
 ]
 
 LOYALTY_WEIGHTS = {"none": 0.80, "silver": 0.15, "gold": 0.05}

@@ -9,8 +9,8 @@ the code is Neon-specific.
 | Neon project | `hospedaplus_database`, branch `production`, Free plan |
 | Region | AWS US East (Ohio), `aws-us-east-2` |
 | Database | `hospedaplus`, PostgreSQL 16, owner role `hospedaplus_owner` |
-| Data | `full` mode, loaded 2026-10-15 from a laptop |
-| Health | `python -m seed check`: 20/20 passed |
+| Data | `full` mode, loaded 2026-10-15 from a laptop, **old catalog**: reload to move to shared catalog 1.0.0 |
+| Health | `python -m seed check`: 20/20 passed (21 checks after the reload) |
 
 ![Health evidence](image.png)
 

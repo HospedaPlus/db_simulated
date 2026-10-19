@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import psycopg
 
-from .catalog import CHANNELS, HOTELS, ROOM_TYPES, TOTAL_ROOMS
+from .catalog import CATALOG_VERSION, CHANNELS, HOTELS, ROOM_TYPES, TOTAL_ROOMS
 from .db import connect
 
 REQUIRED_TABLES = [
@@ -75,6 +75,20 @@ def run_checks(url: str) -> list[Result]:
             results.append(Result(f"{table} count", counts[table] > 0, f"{counts[table]:,} rows"))
         results.append(Result("anomalies count", True,
                               f"{counts['reservation_anomalies']:,} rows (injected defects)"))
+
+        # 3b. The database holds exactly the shared catalog (codes other sources join on)
+        cur.execute("SELECT code, country, currency, timezone FROM hotels")
+        db_hotels = set(cur.fetchall())
+        file_hotels = {(h.code, h.country, h.currency, h.timezone) for h in HOTELS}
+        cur.execute("SELECT code, channel_type, commission_pct FROM channels")
+        db_channels = {(c, t, float(p)) for c, t, p in cur.fetchall()}
+        file_channels = {(c.code, c.channel_type, float(c.commission_pct)) for c in CHANNELS}
+        cur.execute("SELECT code FROM room_types")
+        db_types = {r[0] for r in cur.fetchall()}
+        diff = (len(db_hotels ^ file_hotels) + len(db_channels ^ file_channels)
+                + len(db_types ^ {rt.code for rt in ROOM_TYPES}))
+        results.append(Result(f"matches shared catalog {CATALOG_VERSION}", diff == 0,
+                              f"{diff} hotel/channel/room-type rows differ" if diff else "hotels, channels and room types identical"))
 
         # 4. Key relationships and business consistency
         results.append(_zero("rooms -> hotels/room_types", cur, """

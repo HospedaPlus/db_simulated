@@ -20,4 +20,4 @@ build-backend = "setuptools.build_meta"
 packages = ["seed"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["test"]

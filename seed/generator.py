@@ -76,7 +76,7 @@ TABLE_ORDER = [
 
 
 def _money(value: float, currency: str) -> float:
-    # Pesos are quoted in round thousands; euros keep cents.
+    # Colombian pesos are quoted in round thousands; MXN, BRL and EUR keep cents.
     return float(round(value, -3)) if currency == "COP" else round(value, 2)
 
 
