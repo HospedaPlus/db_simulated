@@ -8,6 +8,7 @@ the code is Neon-specific.
 |---|---|
 | Neon project | `hospedaplus_database`, branch `production`, Free plan |
 | Region | AWS US East (Ohio), `aws-us-east-2` |
+| Endpoint | `ep-divine-cake-b48dsbxg` (pooled host `ep-divine-cake-b48dsbxg-pooler.c-6.us-east-2.aws.neon.tech`) |
 | Database | `hospedaplus`, PostgreSQL 16 |
 | Roles | `hospedaplus_owner` (seed), `hospedaplus_api` (API and Kafka consumers), `hospedaplus_reader` (team and Airflow) |
 | Data | `full` mode, loaded 2026-10-15 from a laptop, **old catalog**: reload to move to shared catalog 1.0.0 |
@@ -25,7 +26,7 @@ the code is Neon-specific.
    `hospedaplus`, **connection pooling off**:
 
    ```
-   postgresql://hospedaplus_owner:<password>@<endpoint>.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require&channel_binding=require
+   postgresql://hospedaplus_owner:<password>@ep-divine-cake-b48dsbxg.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require&channel_binding=require
    ```
 
    The direct host (no `-pooler`) is for the seed, which creates tables and
@@ -103,11 +104,20 @@ connection details in the console. Nobody sends passwords over chat.
 
 | Field | Value |
 |---|---|
-| Host | `<endpoint>-pooler.c-6.us-east-2.aws.neon.tech` (pooled) or `<endpoint>.c-6.us-east-2.aws.neon.tech` (direct) |
+| Host | `ep-divine-cake-b48dsbxg-pooler.c-6.us-east-2.aws.neon.tech` (pooled) or `ep-divine-cake-b48dsbxg.c-6.us-east-2.aws.neon.tech` (direct) |
 | Port | `5432` |
 | Database | `hospedaplus` |
 | User | `hospedaplus_reader` (team) |
 | SSL | required (`sslmode=require`) |
+
+Ready-to-use URLs; only the password is missing (ask the database owner
+privately; it is never written in the repo):
+
+| Role | URL |
+|---|---|
+| `hospedaplus_reader` | `postgresql://hospedaplus_reader:<password>@ep-divine-cake-b48dsbxg-pooler.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require` |
+| `hospedaplus_api` | `postgresql://hospedaplus_api:<password>@ep-divine-cake-b48dsbxg-pooler.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require` |
+| `hospedaplus_owner` (seed) | `postgresql://hospedaplus_owner:<password>@ep-divine-cake-b48dsbxg.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require&channel_binding=require` |
 
 > Port 5432 is Neon's. Your local Docker database uses 5437
 > (`POSTGRES_PORT` in `.env`), so the two never clash.
@@ -138,14 +148,14 @@ the database wakes up.
 **psql:**
 
 ```bash
-psql "postgresql://hospedaplus_reader:<password>@<endpoint>-pooler.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require"
+psql "postgresql://hospedaplus_reader:<password>@ep-divine-cake-b48dsbxg-pooler.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require"
 ```
 
 **This repo, read-only check** (URL set only for that terminal):
 
 ```bash
 # bash / macOS
-export DATABASE_URL="postgresql://hospedaplus_reader:<password>@<endpoint>-pooler.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require"
+export DATABASE_URL="postgresql://hospedaplus_reader:<password>@ep-divine-cake-b48dsbxg-pooler.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require"
 python -m seed check
 unset DATABASE_URL
 ```

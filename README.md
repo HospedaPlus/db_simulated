@@ -159,6 +159,7 @@ loaded in `full` mode and verified with `python -m seed check`.
 |---|---|
 | Provider | Neon, project `hospedaplus_database`, branch `production` |
 | Region | AWS US East (Ohio), `aws-us-east-2` |
+| Host | `ep-divine-cake-b48dsbxg-pooler.c-6.us-east-2.aws.neon.tech` (pooled) · `ep-divine-cake-b48dsbxg.c-6.us-east-2.aws.neon.tech` (direct) |
 | Database | `hospedaplus` |
 | Connection | port 5432, SSL required; direct host (no `-pooler`) for the seed, `-pooler` host for the API, consumers, Airflow and the team |
 | Credentials | Neon console → **Connect**, role `hospedaplus_reader` (read-only); never commit them |
@@ -167,7 +168,7 @@ loaded in `full` mode and verified with `python -m seed check`.
 Point a single terminal at it (PowerShell shown), then go back to local:
 
 ```powershell
-$env:DATABASE_URL = "postgresql://hospedaplus_reader:<password>@<endpoint>-pooler.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require"
+$env:DATABASE_URL = "postgresql://hospedaplus_reader:<password>@ep-divine-cake-b48dsbxg-pooler.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require"
 python -m seed check             # read-only, safe to run any time
 Remove-Item Env:DATABASE_URL     # back to your local database
 ```
