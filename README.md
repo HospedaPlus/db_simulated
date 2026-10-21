@@ -139,9 +139,9 @@ would break the constraints, so they go to `reservation_anomalies`
 # unit tests only (no database needed)
 pytest
 # plus database tests: point to a throwaway database, it gets wiped
-TEST_DATABASE_URL=postgresql://hospedaplus:hospedaplus@localhost:5432/hospedaplus_test pytest
+TEST_DATABASE_URL=postgresql://hospedaplus:hospedaplus@localhost:5437/hospedaplus_test pytest
 # PowerShell:
-# $env:TEST_DATABASE_URL="postgresql://hospedaplus:hospedaplus@localhost:5432/hospedaplus_test"; pytest
+# $env:TEST_DATABASE_URL="postgresql://hospedaplus:hospedaplus@localhost:5437/hospedaplus_test"; pytest
 ```
 
 Create the test database once with
@@ -160,14 +160,14 @@ loaded in `full` mode and verified with `python -m seed check`.
 | Provider | Neon, project `hospedaplus_database`, branch `production` |
 | Region | AWS US East (Ohio), `aws-us-east-2` |
 | Database | `hospedaplus` |
-| Connection | direct host (no `-pooler`) for the seed; the `-pooler` host suits the API |
-| Credentials | ask the team; never commit them |
+| Connection | port 5432, SSL required; direct host (no `-pooler`) for the seed, `-pooler` host for the API, consumers, Airflow and the team |
+| Credentials | Neon console → **Connect**, role `hospedaplus_reader` (read-only); never commit them |
 | Last full load | 2026-10-15 |
 
 Point a single terminal at it (PowerShell shown), then go back to local:
 
 ```powershell
-$env:DATABASE_URL = "postgresql://<role>:<password>@<endpoint>.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require&channel_binding=require"
+$env:DATABASE_URL = "postgresql://hospedaplus_reader:<password>@<endpoint>-pooler.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require"
 python -m seed check             # read-only, safe to run any time
 Remove-Item Env:DATABASE_URL     # back to your local database
 ```
@@ -176,7 +176,8 @@ Remove-Item Env:DATABASE_URL     # back to your local database
   `python -m seed seed --mode full --allow-remote`.
 - Never run `pytest` against it: the database tests wipe their database
   (and `tests/conftest.py` refuses non-local URLs anyway).
-- Setup, costs, limits and the EC2 job: see `DEPLOYMENT.md`.
+- Roles, pooled vs direct host, DBeaver/psql and setup: see
+  [`DEPLOYEMENT.md`](DEPLOYEMENT.md).
 
 ## How it fits the project
 
