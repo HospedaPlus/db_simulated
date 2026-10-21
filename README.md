@@ -175,7 +175,7 @@ Remove-Item Env:DATABASE_URL     # back to your local database
 - Re-seeding replaces everyone's data: agree with the team first, then
   `python -m seed seed --mode full --allow-remote`.
 - Never run `pytest` against it: the database tests wipe their database
-  (and `tests/conftest.py` refuses non-local URLs anyway).
+  (and `test/conftest.py` refuses non-local URLs anyway).
 - Roles, pooled vs direct host, DBeaver/psql and setup: see
   [`DEPLOYEMENT.md`](DEPLOYEMENT.md).
 
