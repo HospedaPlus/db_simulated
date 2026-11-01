@@ -62,6 +62,7 @@ class Dataset:
     inventory: list = field(default_factory=list)
     reservations: list = field(default_factory=list)
     anomalies: list = field(default_factory=list)
+    cancellation_policies: list = field(default_factory=list)
     rejected_full: int = 0  # bookings refused because the room type was sold out
 
     def counts(self) -> dict:
@@ -71,13 +72,31 @@ class Dataset:
 # Load order respects foreign keys; also the order of the TABLE_COLUMNS below.
 TABLE_ORDER = [
     "room_types", "hotels", "channels", "guests", "rooms",
-    "rates", "inventory", "reservations", "anomalies",
+    "rates", "inventory", "reservations", "anomalies", "cancellation_policies",
+]
+
+# RN-07, the same for every channel type to start with. Changing a policy
+# later means changing rows in cancellation_policies, not code.
+# (is_refundable, hours_from, hours_to, penalty_pct, penalty_base)
+RN07_POLICY = [
+    (True, 72, None, 0, "first_night"),
+    (True, 24, 72, 50, "first_night"),
+    (True, 0, 24, 100, "first_night"),   # also no-shows
+    (False, 0, None, 100, "total"),
 ]
 
 
 def _money(value: float, currency: str) -> float:
     # Colombian pesos are quoted in round thousands; MXN, BRL and EUR keep cents.
     return float(round(value, -3)) if currency == "COP" else round(value, 2)
+
+
+def nightly_price(hotel: catalog.Hotel, room_type: str, season: str) -> float:
+    """Rate per room per night (RN-05 season x destination). Shared with the
+    simulator, which adds new nights every day with the same prices."""
+    factor = hotel.price_factor * (catalog.RESORT_FACTOR if hotel.category == "resort" else 1.0)
+    return _money(catalog.BASE_RATES[hotel.currency][room_type] * factor
+                  * catalog.SEASON_MULTIPLIER[season], hotel.currency)
 
 
 def _rng(settings: Settings, name: str) -> random.Random:
@@ -107,7 +126,7 @@ def generate(settings: Settings) -> Dataset:
 
     ch_index = {}
     for i, ch in enumerate(catalog.CHANNELS, start=1):
-        ds.channels.append((ch.code, ch.name, ch.channel_type, ch.commission_pct))
+        ds.channels.append((ch.code, ch.name, ch.channel_type, ch.commission_pct, ch.source))
         ch_index[ch.code] = i
 
     # --- rooms -------------------------------------------------------------
@@ -129,13 +148,10 @@ def generate(settings: Settings) -> Dataset:
     # price[(hotel_id, room_type_id)][day_index] = nightly rate
     price: dict[tuple[int, int], list[float]] = {}
     for hotel_id, h in enumerate(catalog.HOTELS, start=1):
-        base_table = catalog.BASE_RATES[h.currency]
-        factor = h.price_factor * (catalog.RESORT_FACTOR if h.category == "resort" else 1.0)
         seasons = [catalog.season_for(d, h.country) for d in days]
         for rt in catalog.ROOM_TYPES:
             key = (hotel_id, rt_index[rt.code])
-            nightly = [_money(base_table[rt.code] * factor * catalog.SEASON_MULTIPLIER[s], h.currency)
-                       for s in seasons]
+            nightly = [nightly_price(h, rt.code, s) for s in seasons]
             price[key] = nightly
             # Collapse consecutive nights of the same season into one rate row.
             run_start = 0
@@ -148,14 +164,14 @@ def generate(settings: Settings) -> Dataset:
     # --- guests ------------------------------------------------------------
     rng = _rng(settings, "guests")
     origins = catalog.GUEST_ORIGINS
-    tiers = list(catalog.LOYALTY_WEIGHTS)
-    tier_w = list(catalog.LOYALTY_WEIGHTS.values())
     for n in range(1, settings.mode.guests + 1):
         country, pool, _ = rng.choices(origins, weights=[o[2] for o in origins])[0]
         first = rng.choice(catalog.NAME_POOLS[pool][0])
         last = rng.choice(catalog.NAME_POOLS[pool][1])
         email = f"{first}.{last}{n}@example.com".lower()  # example.com never delivers mail
-        ds.guests.append((f"{first} {last}", email, country, rng.choices(tiers, tier_w)[0]))
+        # Same code and tier as the guest F2 events call G-000000n.
+        ds.guests.append((catalog.guest_ref(n), f"{first} {last}", email, country,
+                          catalog.loyalty_tier(n)))
 
     # --- reservations ------------------------------------------------------
     rng = _rng(settings, "reservations")
@@ -223,9 +239,10 @@ def generate(settings: Settings) -> Dataset:
             cancelled_at = created + timedelta(seconds=rng.randint(60, span) if span > 60 else 60)
 
         # No overbooking: a booking that would take a room we don't have is refused.
+        # Only confirmed bookings hold rooms (cancelled and no-show gave them back).
         nights_idx = range(first_idx, first_idx + nights)
         slots = available[(hotel_id, rt_id)]
-        if status != "cancelled":
+        if status == "confirmed":
             if any(slots[i] < rooms_count for i in nights_idx):
                 ds.rejected_full += 1
                 continue
@@ -240,7 +257,7 @@ def generate(settings: Settings) -> Dataset:
         refundable = channel == "corporate" or rng.random() < REFUNDABLE_SHARE
 
         code = f"F3-{len(ds.reservations) + 1:07d}"
-        ds.reservations.append((code, hotel_id, rt_id, ch_index[channel], guest_id,
+        ds.reservations.append((code, "F3", code, hotel_id, rt_id, ch_index[channel], guest_id,
                                 check_in, check_out, rooms_count, adults, children, infants,
                                 status, refundable, h.currency, first_night, total,
                                 created, cancelled_at))
@@ -249,7 +266,7 @@ def generate(settings: Settings) -> Dataset:
     for (hotel_id, rt_id), total_rooms in rooms_by_type.items():
         slots = available[(hotel_id, rt_id)]
         for i, d in enumerate(days):
-            ds.inventory.append((hotel_id, rt_id, d, total_rooms, slots[i]))
+            ds.inventory.append((hotel_id, rt_id, d, total_rooms, total_rooms - slots[i], 0))
 
     # --- injected defects (statement 5.3 / US-26) -------------------------
     rng = _rng(settings, "anomalies")
@@ -257,6 +274,7 @@ def generate(settings: Settings) -> Dataset:
     n_dates = round(len(ds.reservations) * settings.invalid_dates_rate)
     for n, defect in enumerate(["zero_guests"] * n_zero + ["checkout_before_checkin"] * n_dates, start=1):
         src = ds.reservations[rng.randrange(len(ds.reservations))]
+        src = src[:1] + src[3:]  # drop source and external_code: same layout as before
         check_in, check_out = src[5], src[6]
         adults, children, infants = src[8], src[9], src[10]
         if defect == "zero_guests":
@@ -266,6 +284,11 @@ def generate(settings: Settings) -> Dataset:
         ds.anomalies.append((f"F3X-{n:06d}", src[1], src[2], src[3], src[4], check_in, check_out,
                              adults, children, infants, src[13], src[15], defect, src[16]))
 
+    # --- cancellation policies (RN-07), one set per channel type -----------
+    for channel_type in ("direct", "ota", "agency", "corporate"):
+        for refundable, h_from, h_to, pct, base in RN07_POLICY:
+            ds.cancellation_policies.append((channel_type, refundable, h_from, h_to, pct, base))
+
     return ds
 
 
@@ -274,14 +297,14 @@ TABLE_COLUMNS = {
     "room_types": ("room_types", ["code", "name", "max_guests"]),
     "hotels": ("hotels", ["code", "name", "category", "city", "country", "timezone",
                           "currency", "is_active", "created_at"]),
-    "channels": ("channels", ["code", "name", "channel_type", "commission_pct"]),
-    "guests": ("guests", ["full_name", "email", "country", "loyalty_tier"]),
+    "channels": ("channels", ["code", "name", "channel_type", "commission_pct", "source"]),
+    "guests": ("guests", ["guest_ref", "full_name", "email", "country", "loyalty_tier"]),
     "rooms": ("rooms", ["hotel_id", "room_type_id", "room_number", "floor", "is_active"]),
     "rates": ("rates", ["hotel_id", "room_type_id", "season_code", "valid_from", "valid_to",
                         "currency", "amount"]),
     "inventory": ("inventory", ["hotel_id", "room_type_id", "inventory_date", "total_rooms",
-                                "available_rooms"]),
-    "reservations": ("reservations", ["code", "hotel_id", "room_type_id", "channel_id", "guest_id",
+                                "sold_rooms", "overbooking_limit"]),
+    "reservations": ("reservations", ["code", "source", "external_code", "hotel_id", "room_type_id", "channel_id", "guest_id",
                                       "check_in", "check_out", "rooms_count", "adults", "children",
                                       "infants", "status", "is_refundable", "currency",
                                       "first_night_amount", "total_amount", "created_at",
@@ -290,4 +313,6 @@ TABLE_COLUMNS = {
                                             "guest_id", "check_in", "check_out", "adults",
                                             "children", "infants", "currency", "total_amount",
                                             "defect_type", "created_at"]),
+    "cancellation_policies": ("cancellation_policies", ["channel_type", "is_refundable", "hours_from",
+                                                        "hours_to", "penalty_pct", "penalty_base"]),
 }

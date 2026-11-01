@@ -1,6 +1,7 @@
-# Local F3 database + seed job.
-#   docker compose up -d postgres          start the database (schema is created on first start)
+# Local F3 database + seed job + continuous booking simulator.
+#   docker compose up -d postgres          start the database (schema `operation` is created on first start)
 #   docker compose run --rm seed all       seed it and run the checks
+#   docker compose up simulator            keep direct/corporate bookings arriving (Ctrl+C to stop)
 services:
   postgres:
     image: postgres:16-alpine
@@ -14,9 +15,10 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       # Only runs when the volume is empty (first start). Numbered so the
-      # tables exist before the indexes. reset.sql is NOT mounted on purpose.
+      # tables exist before the indexes and functions. reset.sql is NOT mounted on purpose.
       - ./sql/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
       - ./sql/indexes.sql:/docker-entrypoint-initdb.d/02_indexes.sql:ro
+      - ./sql/functions.sql:/docker-entrypoint-initdb.d/03_functions.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -38,6 +40,21 @@ services:
       SEED_ZERO_GUESTS_RATE: ${SEED_ZERO_GUESTS_RATE:-0.02}
       SEED_INVALID_DATES_RATE: ${SEED_INVALID_DATES_RATE:-0.02}
     command: ["all"]
+
+  # The continuous F3 source: books through operation.reservar() every few seconds.
+  # Run the seed first. Against Neon, set SIM_DATABASE_URL to the app_writer URL
+  # (pooled host) in .env.
+  simulator:
+    build: .
+    profiles: ["simulator"]     # started only when you ask for it
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${SIM_DATABASE_URL:-postgresql://hospedaplus:hospedaplus@postgres:5432/hospedaplus}
+      SIM_BOOKINGS_PER_MIN: ${SIM_BOOKINGS_PER_MIN:-6}
+    command: ["simulate"]
+    restart: unless-stopped
 
 volumes:
   pgdata:

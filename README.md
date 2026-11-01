@@ -8,9 +8,18 @@ same data.
 - 28 hotels in 5 countries (Colombia, Mexico, Brazil, Portugal, Spain) and exactly
   4,000 rooms, read from the **shared catalog** every source uses
 - room types, channels with RN-02 commissions, seasonal rates (RN-05)
-- daily inventory per hotel and room type, **no overbooking**
+- daily inventory per hotel and room type, 365 nights ahead, with a
+  controlled **overbooking limit** (RN-03, 0 by default)
+- one booking function, `operation.reservar()`, that every channel uses
+  (F3 direct, F2 OTAs, F4 agencies), with rejections stored (RN-04)
+- cancellation policies per channel and penalties in the hotel's time zone (RN-07)
+- 60,000+ guests with the same `guest_ref` and loyalty tier as F2's events
 - direct and corporate reservations, with cancellations and no-shows
+- a **simulator** that keeps direct bookings arriving (F3 is a continuous source)
 - configurable bad rows for the data-quality layer (statement 5.3)
+
+Everything lives in the **`operation`** schema. F2's event ledger sits next
+to it in the `streaming` schema of the same database.
 
 Same seed + same start date = the same data, row for row.
 
@@ -45,7 +54,7 @@ Expected ending:
 ```
   PASS  inventory available = total - sold  none found
   ...
-  21/21 checks passed
+  24/24 checks passed
 ```
 
 No Python on your machine? Run the seed in a container instead:
@@ -61,33 +70,36 @@ No Python on your machine? Run the seed in a container instead:
 | `python -m seed all` | `init` + `seed` + `check` | Yes |
 | `python -m seed reset` | Drops every table (use after changing `schema.sql`) | Yes |
 | `python -m seed fingerprint` | md5 per table, to prove two runs are identical | No |
+| `python -m seed simulate` | Keeps direct/corporate bookings arriving through `reservar()` | No (adds rows) |
 
 Options: `--mode dev|full`, `--seed 42`, `--start-date 2026-10-14`,
-`--allow-remote`, `--json` (for `check` and `fingerprint`).
+`--allow-remote`, `--json` (for `check` and `fingerprint`),
+`--per-minute 6` and `--duration 0` (for `simulate`).
 
 Everything can also come from `.env` (see `.env.example`):
 `DATABASE_URL`, `SEED_MODE`, `SEED_RANDOM_SEED`, `SEED_START_DATE`,
-`SEED_ZERO_GUESTS_RATE`, `SEED_INVALID_DATES_RATE`.
+`SEED_ZERO_GUESTS_RATE`, `SEED_INVALID_DATES_RATE`, `SIM_BOOKINGS_PER_MIN`.
 
 ## How it works
 
 ```
-sql/schema.sql ──► tables, keys, constraints      ┐
+sql/schema.sql ──► schema operation, tables, keys ┐
 sql/indexes.sql ─► secondary indexes              ├─ python -m seed init
-                                                  ┘
+sql/functions.sql► reservar(), liberar(), ...     ┘
 catalog/catalog.json ► shared catalog: hotels, room types, channels, seasons
 seed/catalog.py ─► loads it + F3-only prices and guest names
 seed/generator.py ► builds every row in memory from the seed
 seed/db.py ──────► TRUNCATE + COPY in one transaction
 seed/checks.py ──► health and integrity checks, fingerprints
 seed/safety.py ──► blocks destructive commands on remote databases
+seed/simulate.py ► continuous bookings + a new night on sale every day
 ```
 
 **Reproducible.** Each table uses its own random stream derived from the
 seed, and the tables are truncated with `RESTART IDENTITY`, so ids and
 values come out the same every time. The window is
-`start_date - history` to `start_date + horizon` (dev: 90 + 30 nights,
-full: 400 + 180). The start date defaults to today so data stays current;
+`start_date - history` to `start_date + horizon` (dev: 90 + 365 nights,
+full: 400 + 365; inventory and rates always cover a year ahead). The start date defaults to today so data stays current;
 pin `SEED_START_DATE` to reproduce an old run.
 
 **Realistic dates.** City hotels get more arrivals Sunday to Tuesday
@@ -108,13 +120,45 @@ New bookings get `created_at = now()`, so in practice: no check-in before
 today. Past stays loaded by the seed are fine because they were "made"
 before they started.
 
-**No overbooking.** The generator refuses a booking when the room type is
-full that night, and the database rejects `available_rooms < 0` anyway.
-Inventory is derived from the reservations, so the two always agree.
+**One way to book: `operation.reservar()`.** Every writer (FastAPI, the
+F2 Kafka consumer, the F4 agencies DAG, the simulator) calls the same
+database function with catalog codes:
+
+```sql
+SELECT * FROM operation.reservar('direct_web', 'WEB-123', 'HP-CO-001', 'DOUBLE', 'G-0000001',
+                                 DATE '2026-12-01', DATE '2026-12-03', 1, 2, true);
+--  result    | reservation_code | reservation_id | nights_without_room
+--  confirmed | WEB-123          |          52793 | {}
+```
+
+It locks the nights with `SELECT ... FOR UPDATE` (always in date order, so
+no deadlocks) and sells only if `sold_rooms < total_rooms + overbooking_limit`
+every night. Otherwise it returns `rejected`, with the full nights, and keeps
+a row in `reservation_rejections` (RN-04). The same `(channel, external
+code)` twice returns `already_exists`: Kafka redeliveries and re-run DAGs
+don't book twice. Its companions:
+
+| Function | What it does |
+|---|---|
+| `liberar(code, status)` | `cancelled`, `no_show`, `relocated` or `duplicate`: gives the nights back (only once) |
+| `penalidad(code, at)` | what cancelling at `at` would cost (RN-07, check-in 15:00 hotel time); changes nothing |
+| `cancelar(code, at)` | cancels, stores `penalty_amount` and frees the nights |
+| `refresh_overbooking_limits(today)` | daily RN-03 limits from `cancellation_rate_by_lead`; 0 on nights with a `high` event in `local_events` |
+
+**Overbooking under control.** `inventory.overbooking_limit` starts at 0,
+so nothing is oversold until the daily DAG computes a limit. The database
+rejects `sold_rooms > total_rooms + overbooking_limit` anyway, and
+`available_rooms` is computed by the database. The seed derives `sold_rooms`
+from its confirmed reservations, so the two always agree.
+
+**Guests shared with F2.** `guests.guest_ref` is `G-0000001`… and
+`loyalty_tier` follows F2's rule (`seed/catalog.py`, copied from
+`buenavista-streaming/src/events.py`), so a guest an OTA event names is the
+same person, with the same tier, here. Gold guests are never relocated (RN-09).
 
 **Safe by default.** `seed`, `all` and `reset` stop if `DATABASE_URL`
 points anywhere other than localhost (or the compose service `postgres`).
-Add `--allow-remote` when you really mean to load AWS or Supabase.
+Add `--allow-remote` when you really mean to load Neon.
 
 **Bad data on purpose.** Rows with zero guests or check-out before check-in
 would break the constraints, so they go to `reservation_anomalies`
@@ -124,13 +168,15 @@ would break the constraints, so they go to `reservation_anomalies`
 
 `python -m seed check` exits with code 0 only if all of these pass:
 
-- connectivity and server version; all 9 tables present
-- counts: 28 hotels, 4,000 rooms, 4 room types, 21 channels, data in the rest
-- hotels, channels and room types identical to the shared catalog version
+- connectivity; all 14 tables and the 5 booking functions in `operation`
+- counts: 28 hotels, 4,000 rooms, 4 room types, 21 channels, 60,000+ guests,
+  16 cancellation-policy rows, data in the rest
+- hotels, channels (with their source) and room types identical to the shared catalog
+- guest tiers follow F2's rule
 - no orphan rooms or reservations
-- inventory total = physical rooms; available = total − room-nights sold
+- inventory total = physical rooms; sold = room-nights of confirmed bookings
 - every night has exactly one rate; rates and bookings use the hotel's currency
-- guests fit the room capacity; F3 holds only direct/corporate bookings
+- guests fit the room capacity; each booking's source matches its channel
 - no booking starts before the day it was made (hotel local time)
 
 ## Tests
@@ -146,39 +192,69 @@ TEST_DATABASE_URL=postgresql://hospedaplus:hospedaplus@localhost:5437/hospedaplu
 
 Create the test database once with
 `docker exec -it hospedaplus-f3-db createdb -U hospedaplus hospedaplus_test`.
-The database tests also prove that 50 concurrent buyers of the last room
-produce exactly one sale. CI (`.github/workflows/ci.yml`) runs everything
-against a PostgreSQL service on every push.
+The database tests (`test/test_booking.py`) prove the solution's acceptance
+criteria against a real PostgreSQL:
+
+| Test | Criterion |
+|---|---|
+| 50 concurrent `reservar()` for the last room, limit 0 → 1 confirmed, 49 rejections stored | CA-08, E-15, RN-04 |
+| Same with limit 2 → exactly 3 confirmed | CA-08 |
+| Night with a `high` local event → limit 0 after `refresh_overbooking_limits()` | CA-02 |
+| Cancel 48 h before a refundable stay → 50% of the first night; 100 h → 0; no-show → 100%; non-refundable → 100% of the total | CA-05, RN-07 |
+| Same booking sent twice → stored once | RNF-05 |
+| Cancelling frees the nights, and only once | |
+| The simulator books and keeps a year on sale | |
+
+CI (`.github/workflows/ci.yml`) runs everything against a PostgreSQL 16
+service on every push.
+
+## Continuous source: the simulator
+
+```bash
+python -m seed simulate                 # 6 bookings a minute until Ctrl+C
+docker compose up simulator             # same thing in a container
+```
+
+Every few seconds it books a direct or corporate stay through
+`operation.reservar()` (some get `rejected` when the hotel is full), and now
+and then a guest cancels through `operation.cancelar()`. Once a day it puts a
+new night on sale 365 days ahead. Watch it work:
+
+```bash
+docker exec -it hospedaplus-f3-db psql -U hospedaplus -c "SELECT source, status, count(*) FROM operation.reservations WHERE created_at > now() - interval '5 minutes' GROUP BY 1, 2;"
+```
 
 ## Shared database (Neon)
 
-The team's shared F3 database runs on Neon (managed PostgreSQL 16). It was
-loaded in `full` mode and verified with `python -m seed check`.
+The team's shared F3 database runs on Neon (managed PostgreSQL 16), database
+`hospedaplus`, schema `operation`, branches `development` and `production`.
+Load `development` first. Roles: `hospedaplus_owner` (seed), `app_writer`
+(API, consumers, simulator), `etl_reader` (read-only).
 
 | | |
 |---|---|
-| Provider | Neon, project `hospedaplus_database`, branch `production` |
+| Provider | Neon, project `hospedaplus_database`, branches `development` and `production` |
 | Region | AWS US East (Ohio), `aws-us-east-2` |
 | Host | `ep-divine-cake-b48dsbxg-pooler.c-6.us-east-2.aws.neon.tech` (pooled) · `ep-divine-cake-b48dsbxg.c-6.us-east-2.aws.neon.tech` (direct) |
 | Database | `hospedaplus` |
 | Connection | port 5432, SSL required; direct host (no `-pooler`) for the seed, `-pooler` host for the API, consumers, Airflow and the team |
-| Credentials | Neon console → **Connect**, role `hospedaplus_reader` (read-only); never commit them |
-| Last full load | 2026-10-15 |
+| Credentials | Neon console → **Connect**, role `etl_reader` (read-only); never commit them |
 
 Point a single terminal at it (PowerShell shown), then go back to local:
 
 ```powershell
-$env:DATABASE_URL = "postgresql://hospedaplus_reader:<password>@ep-divine-cake-b48dsbxg-pooler.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require"
+$env:DATABASE_URL = "postgresql://etl_reader:<password>@ep-divine-cake-b48dsbxg-pooler.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require"
 python -m seed check             # read-only, safe to run any time
 Remove-Item Env:DATABASE_URL     # back to your local database
 ```
 
-- Re-seeding replaces everyone's data: agree with the team first, then
+- Re-seeding replaces everyone's F3 data: agree with the team first, then,
+  as `hospedaplus_owner`, `python -m seed init` and
   `python -m seed seed --mode full --allow-remote`.
 - Never run `pytest` against it: the database tests wipe their database
   (and `test/conftest.py` refuses non-local URLs anyway).
 - Roles, pooled vs direct host, DBeaver/psql and setup: see
-  [`DEPLOYEMENT.md`](DEPLOYEMENT.md).
+  [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 ## How it fits the project
 
@@ -197,25 +273,31 @@ F1 Kaggle, F6, F7 APIs ─────┘
   read the same file, so the pipeline can join every source. Never edit the
   copy: change the shared catalog, publish a new version and copy it here
   (`seed check` fails if Neon and the file disagree).
-- **Booking API (FastAPI).** Reads availability and rates from `inventory`
-  and `rates`; sells with a single conditional `UPDATE` (see the
-  concurrency test) to stay within the no-overbooking rule.
-- **Pipeline.** Extracts `reservations` and `reservation_anomalies` into
-  Bronze; Silver must catch the anomalies; personal data in `guests` must
-  be pseudonymized before Gold (RN-11).
-- **Not here.** Dynamic pricing (pickup and event multipliers, RN-05/06),
-  duplicate resolution (RN-08) and relocation (RN-09) belong to the
-  services that consume this database.
+- **Booking API (FastAPI), F2 consumer, F4 DAG.** Read availability and
+  rates from `inventory` and `rates`; book with `operation.reservar()`,
+  cancel with `operation.cancelar()`, show penalties with
+  `operation.penalidad()`. The F2 consumer calls them in the same
+  transaction as its ledger insert.
+- **Airflow.** `limites_sobreventa_diario`: Spark writes
+  `cancellation_rate_by_lead`, F6 loads `local_events`, then
+  `refresh_overbooking_limits()`. `reubicacion_diaria`: writes
+  `relocations` and calls `liberar(code, 'relocated')`.
+- **Pipeline.** Extracts `reservations`, `reservation_anomalies`,
+  `reservation_rejections` and `relocations` into Bronze (incrementally, by
+  `created_at` / `rejected_at`); Silver must catch the anomalies; personal
+  data in `guests` must be pseudonymized before Gold (RN-11).
+- **Not here.** Dynamic pricing (pickup and event multipliers, RN-05/06)
+  and duplicate detection (RN-08: `status = 'duplicate'` and `duplicate_of`
+  are ready for it) belong to the services that consume this database.
 
 ## Files
 
 ```
 catalog/        catalog.json (pinned copy of the shared catalog)
-sql/            schema.sql, indexes.sql, reset.sql
+sql/            schema.sql, indexes.sql, functions.sql, reset.sql
 seed/           Python package (python -m seed)
-test/           unit + database tests
-docs/           data_model.md (ERD and table guide)
-DEPLOYMENT.md   AWS RDS / Supabase deployment
+test/           unit + database tests (test_booking.py: reservar() and friends)
+DEPLOYMENT.md   Neon: load, roles, connections, simulator
 Dockerfile      seed job image (local and ECS Fargate)
 docker-compose.yml, .env.example, .github/workflows/ci.yml
 ```
@@ -227,6 +309,9 @@ docker-compose.yml, .env.example, .github/workflows/ci.yml
 - **`Tables are missing`**: run `python -m seed init`.
 - **Changed `schema.sql` but nothing changed**: `IF NOT EXISTS` skips
   existing tables. Run `python -m seed reset` and then `python -m seed all`.
+  With Docker: `docker compose down -v` and start again.
+- **`column "sold_rooms" does not exist`** or tables still in `public`:
+  your database has the old schema. Same fix as above.
 - **`Permission denied` on `sql\schema.sql`, or "is a folder, not a file"**:
   Docker created empty folders because the SQL files weren't there when the
   container first started. Run `docker compose down -v`, delete the folders,

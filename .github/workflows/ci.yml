@@ -16,6 +16,24 @@ jobs:
     # That's why we don't need a .venv here: the whole machine is isolated.
     runs-on: ubuntu-latest
 
+    # A throwaway PostgreSQL 16 next to the job, so the database tests
+    # (reservar(), 50 concurrent buyers, penalties...) run too.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: hospedaplus
+          POSTGRES_PASSWORD: hospedaplus
+          POSTGRES_DB: hospedaplus_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hospedaplus"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql://hospedaplus:hospedaplus@localhost:5432/hospedaplus_test
+
     steps:
       # 1. Download our repo into the machine (it starts empty).
       - uses: actions/checkout@v4
@@ -30,7 +48,6 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[test]"
 
-      # 4. Run the tests. Without TEST_DATABASE_URL the database tests
-      #    are skipped (shown as "s"); step 2 of the CI plan adds Postgres.
+      # 4. Run every test, unit and database ones (TEST_DATABASE_URL above).
       - name: Run tests
         run: pytest -v

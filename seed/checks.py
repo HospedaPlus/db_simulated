@@ -10,14 +10,20 @@ from dataclasses import dataclass
 
 import psycopg
 
-from .catalog import CATALOG_VERSION, CHANNELS, HOTELS, ROOM_TYPES, TOTAL_ROOMS
-from .db import connect
+from .catalog import (CATALOG_VERSION, CHANNELS, F2_GUEST_POOL, HOTELS, ROOM_TYPES, TOTAL_ROOMS,
+                      guest_ref, loyalty_tier)
+from .db import SCHEMA, connect
 
-REQUIRED_TABLES = [
+# Loaded by the seed (and fingerprinted: same settings = same md5).
+FINGERPRINT_TABLES = [
     "room_types", "hotels", "channels", "guests", "rooms",
-    "rates", "inventory", "reservations", "reservation_anomalies",
+    "rates", "inventory", "reservations", "reservation_anomalies", "cancellation_policies",
 ]
-FINGERPRINT_TABLES = REQUIRED_TABLES
+# Written by the running system (reservar(), DAGs, F6), empty after a seed.
+SYSTEM_TABLES = ["reservation_rejections", "relocations", "local_events", "cancellation_rate_by_lead"]
+REQUIRED_TABLES = FINGERPRINT_TABLES + SYSTEM_TABLES
+REQUIRED_FUNCTIONS = ["reservar", "liberar", "penalidad", "cancelar", "refresh_overbooking_limits"]
+POLICY_ROWS = 16  # RN-07: 4 rules x 4 channel types
 
 
 @dataclass
@@ -52,12 +58,19 @@ def run_checks(url: str) -> list[Result]:
         results.append(Result("connectivity", True, f"PostgreSQL {version}"))
 
         # 2. Required tables
-        cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+        cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = %s", (SCHEMA,))
         present = {r[0] for r in cur.fetchall()}
         missing = [t for t in REQUIRED_TABLES if t not in present]
-        results.append(Result("required tables", not missing,
+        results.append(Result(f"required tables in {SCHEMA}", not missing,
                               f"missing: {', '.join(missing)}" if missing
                               else f"all {len(REQUIRED_TABLES)} present"))
+        cur.execute("SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+                    "WHERE n.nspname = %s", (SCHEMA,))
+        functions = {r[0] for r in cur.fetchall()}
+        missing_fn = [f for f in REQUIRED_FUNCTIONS if f not in functions]
+        results.append(Result("booking functions", not missing_fn,
+                              f"missing: {', '.join(missing_fn)}" if missing_fn
+                              else ", ".join(f"{f}()" for f in REQUIRED_FUNCTIONS)))
         if missing:
             return results  # nothing else makes sense without the tables
 
@@ -71,7 +84,11 @@ def run_checks(url: str) -> list[Result]:
                               f"{counts['room_types']} (expected {len(ROOM_TYPES)})"))
         results.append(Result("channels count", counts["channels"] == len(CHANNELS),
                               f"{counts['channels']} (expected {len(CHANNELS)})"))
-        for table in ("guests", "rates", "inventory", "reservations"):
+        results.append(Result("guests cover F2's pool", counts["guests"] >= F2_GUEST_POOL,
+                              f"{counts['guests']:,} (at least {F2_GUEST_POOL:,})"))
+        results.append(Result("cancellation policies (RN-07)", counts["cancellation_policies"] == POLICY_ROWS,
+                              f"{counts['cancellation_policies']} rows (expected {POLICY_ROWS})"))
+        for table in ("rates", "inventory", "reservations"):
             results.append(Result(f"{table} count", counts[table] > 0, f"{counts[table]:,} rows"))
         results.append(Result("anomalies count", True,
                               f"{counts['reservation_anomalies']:,} rows (injected defects)"))
@@ -80,15 +97,22 @@ def run_checks(url: str) -> list[Result]:
         cur.execute("SELECT code, country, currency, timezone FROM hotels")
         db_hotels = set(cur.fetchall())
         file_hotels = {(h.code, h.country, h.currency, h.timezone) for h in HOTELS}
-        cur.execute("SELECT code, channel_type, commission_pct FROM channels")
-        db_channels = {(c, t, float(p)) for c, t, p in cur.fetchall()}
-        file_channels = {(c.code, c.channel_type, float(c.commission_pct)) for c in CHANNELS}
+        cur.execute("SELECT code, channel_type, commission_pct, source FROM channels")
+        db_channels = {(c, t, float(p), src) for c, t, p, src in cur.fetchall()}
+        file_channels = {(c.code, c.channel_type, float(c.commission_pct), c.source) for c in CHANNELS}
         cur.execute("SELECT code FROM room_types")
         db_types = {r[0] for r in cur.fetchall()}
         diff = (len(db_hotels ^ file_hotels) + len(db_channels ^ file_channels)
                 + len(db_types ^ {rt.code for rt in ROOM_TYPES}))
         results.append(Result(f"matches shared catalog {CATALOG_VERSION}", diff == 0,
                               f"{diff} hotel/channel/room-type rows differ" if diff else "hotels, channels and room types identical"))
+
+        # 3c. Guests are the same people F2 events talk about
+        cur.execute("SELECT guest_ref, loyalty_tier FROM guests WHERE guest_ref <= %s",
+                    (guest_ref(F2_GUEST_POOL),))
+        off = sum(1 for ref, tier in cur.fetchall() if tier != loyalty_tier(int(ref[2:])))
+        results.append(Result("guest tiers match F2", off == 0,
+                              f"{off} guests with another tier than F2" if off else "same rule as F2"))
 
         # 4. Key relationships and business consistency
         results.append(_zero("rooms -> hotels/room_types", cur, """
@@ -110,17 +134,17 @@ def run_checks(url: str) -> list[Result]:
                        FROM rooms WHERE is_active GROUP BY 1, 2) r
               ON r.hotel_id = i.hotel_id AND r.room_type_id = i.room_type_id
             WHERE i.total_rooms <> coalesce(r.n, 0)""", "inventory rows off"))
-        results.append(_zero("inventory available = total - sold", cur, """
+        results.append(_zero("inventory sold = confirmed bookings", cur, """
             WITH sold AS (
                 SELECT r.hotel_id, r.room_type_id, d::date AS night, sum(r.rooms_count) AS n
                 FROM reservations r,
                      generate_series(r.check_in, r.check_out - 1, interval '1 day') d
-                WHERE r.status <> 'cancelled'
+                WHERE r.status = 'confirmed'
                 GROUP BY 1, 2, 3)
             SELECT count(*) FROM inventory i
             LEFT JOIN sold s ON s.hotel_id = i.hotel_id AND s.room_type_id = i.room_type_id
                             AND s.night = i.inventory_date
-            WHERE i.available_rooms <> i.total_rooms - coalesce(s.n, 0)""",
+            WHERE i.sold_rooms <> coalesce(s.n, 0)""",
             "inventory rows don't match sales"))
         results.append(_zero("every night has exactly one rate", cur, """
             SELECT count(*) FROM inventory i
@@ -141,10 +165,10 @@ def run_checks(url: str) -> list[Result]:
             SELECT count(*) FROM reservations r JOIN hotels h ON h.id = r.hotel_id
             WHERE r.check_in < (r.created_at AT TIME ZONE h.timezone)::date""",
             "bookings for a night that had already passed"))
-        results.append(_zero("F3 bookings use F3 channels", cur, """
+        results.append(_zero("booking source matches its channel", cur, """
             SELECT count(*) FROM reservations r JOIN channels c ON c.id = r.channel_id
-            WHERE c.channel_type NOT IN ('direct', 'corporate')""",
-            "OTA/agency bookings in F3"))
+            WHERE r.source <> c.source""",
+            "bookings whose source is not their channel's (e.g. an OTA booking marked F3)"))
 
     return results
 
@@ -154,7 +178,7 @@ def fingerprint(url: str) -> dict[str, str]:
     same settings must give identical fingerprints: that's the proof the
     seed is reproducible."""
     with connect(url) as conn, conn.cursor() as cur:
-        cur.execute("SET TIME ZONE 'UTC'")  # timestamps print the same on any server
+        cur.execute("SET LOCAL TIME ZONE 'UTC'")  # timestamps print the same on any server
         out = {}
         for table in FINGERPRINT_TABLES:
             out[table] = _one(cur, f"SELECT coalesce(md5(string_agg(t::text, '|' ORDER BY t.id)), '-') "
