@@ -45,13 +45,15 @@ class Mode:
 
     name: str
     history_days: int   # nights before the start date (past stays, no-shows)
-    horizon_days: int   # nights from the start date onwards (future bookings)
+    horizon_days: int   # nights from the start date onwards (inventory, rates, future bookings)
     guests: int
 
 
 MODES = {
-    "dev": Mode("dev", history_days=90, horizon_days=30, guests=40_000),
-    "full": Mode("full", history_days=400, horizon_days=180, guests=100_000),
+    # Inventory and rates always reach 365 nights ahead, so reservar() can sell
+    # any date a guest could ask for. Guests: at least F2's pool (60,000).
+    "dev": Mode("dev", history_days=90, horizon_days=365, guests=60_000),
+    "full": Mode("full", history_days=400, horizon_days=365, guests=100_000),
 }
 
 

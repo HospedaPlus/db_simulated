@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -121,11 +122,13 @@ class Channel:
     name: str
     channel_type: str
     commission_pct: float
+    source: str  # which simulated source sells through it: F2 (OTA), F3 (own engine), F4 (agencies)
 
 
 # RN-02 commissions come with each channel in the shared catalog:
 # OTA 18% (F2), traditional agency 10% (F4: AG01..AG15), direct and corporate 0%.
-CHANNELS = [Channel(c["code"], c["name"], c["type"], c["commission_pct"]) for c in _CATALOG["channels"]]
+CHANNELS = [Channel(c["code"], c["name"], c["type"], c["commission_pct"], c["source"])
+            for c in _CATALOG["channels"]]
 
 # Channels that book through our own engine and therefore land in F3.
 # OTA and agency bookings arrive through F2 and F4 instead.
@@ -170,4 +173,21 @@ GUEST_ORIGINS = [
     ("PT", "pt", 0.06), ("US", "en", 0.12), ("GB", "en", 0.05), ("CA", "en", 0.05),
 ]
 
+# Guests are shared with F2 (buenavista-streaming): F2 events carry a
+# guest_ref between G-0000001 and G-0060000, so F3 must always hold at least
+# that many guests, with the same code and the same loyalty tier.
+F2_GUEST_POOL = 60_000
 LOYALTY_WEIGHTS = {"none": 0.80, "silver": 0.15, "gold": 0.05}
+
+
+def guest_ref(number: int) -> str:
+    """Stable synthetic guest code, same format as F2 (src/events.py)."""
+    return f"G-{number:07d}"
+
+
+def loyalty_tier(number: int) -> str:
+    """Loyalty tier of guest `number`. Copy of F2's rule (src/events.py
+    loyalty_tier): it depends only on the number, so G-0001234 has the same
+    tier in F2 events and in this database. Gold guests are never relocated (RN-09)."""
+    rng = random.Random(f"guest-tier:{number}")
+    return rng.choices(list(LOYALTY_WEIGHTS), weights=list(LOYALTY_WEIGHTS.values()))[0]

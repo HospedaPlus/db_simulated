@@ -24,6 +24,14 @@ def settings():
 
 
 @pytest.fixture(scope="session")
+def dataset():
+    """One generated dataset shared by the read-only generator tests (it takes a few seconds)."""
+    from seed.generator import generate
+
+    return generate(load_settings(mode="dev", seed=42, start_date=FIXED_START))
+
+
+@pytest.fixture(scope="session")
 def db_url():
     url = os.getenv("TEST_DATABASE_URL")
     if not url:
@@ -35,3 +43,17 @@ def db_url():
     except psycopg.OperationalError as exc:
         pytest.skip(f"test database not reachable: {exc}")
     return url
+
+
+def load_fresh(url: str, start: date | None = None):
+    """Drop, create and seed the test database. Returns the settings used.
+    Start date = today by default, because reservar() only sells nights
+    from today on (no bookings in the past)."""
+    from seed import db
+    from seed.generator import generate
+
+    s = load_settings(database_url=url, mode="dev", seed=42, start_date=start or date.today())
+    db.drop_schema(url)
+    db.init_schema(url)
+    db.load(url, generate(s))
+    return s

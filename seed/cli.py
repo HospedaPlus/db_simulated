@@ -6,19 +6,21 @@
     all          init + seed + check, the usual way to start
     reset        drop every table (destructive)
     fingerprint  print a hash per table to compare two runs
+    simulate     keep direct/corporate bookings arriving (continuous source)
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from datetime import date
 
 import psycopg
 
-from . import checks, db
+from . import checks, db, simulate
 from .config import MODES, load_settings
 from .generator import generate
 from .safety import RemoteDatabaseError, ensure_safe, redact
@@ -26,7 +28,7 @@ from .safety import RemoteDatabaseError, ensure_safe, redact
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m seed", description="HospedaPlus F3 database seed")
-    p.add_argument("command", choices=["init", "seed", "check", "all", "reset", "fingerprint"])
+    p.add_argument("command", choices=["init", "seed", "check", "all", "reset", "fingerprint", "simulate"])
     p.add_argument("--mode", choices=sorted(MODES), help="dev (small) or full (default: SEED_MODE or dev)")
     p.add_argument("--seed", type=int, help="random seed (default: SEED_RANDOM_SEED or 42)")
     p.add_argument("--start-date", type=date.fromisoformat,
@@ -34,6 +36,10 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--allow-remote", action="store_true", default=None,
                    help="allow reset/seed against a non-local database")
     p.add_argument("--json", action="store_true", help="machine-readable output for check/fingerprint")
+    p.add_argument("--per-minute", type=float, default=float(os.getenv("SIM_BOOKINGS_PER_MIN", "6")),
+                   help="simulate: bookings per minute (default: SIM_BOOKINGS_PER_MIN or 6)")
+    p.add_argument("--duration", type=float, default=float(os.getenv("SIM_DURATION_SECONDS", "0")),
+                   help="simulate: stop after N seconds (default 0 = run until Ctrl+C)")
     return p
 
 
@@ -45,7 +51,7 @@ def _seed(settings) -> None:
     print(f"  mode={settings.mode.name} seed={settings.seed} start_date={settings.start_date} "
           f"window={ds.window_start}..{ds.window_end} (end exclusive)")
     for table, n in counts.items():
-        print(f"  {table:<13} {n:>9,}")
+        print(f"  {table:<21} {n:>9,}")
     print(f"  bookings refused because the room type was full: {ds.rejected_full:,}")
     print(f"  done in {time.perf_counter() - t0:.1f}s")
 
@@ -68,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "init":
             db.init_schema(url)
-            print("Schema ready (tables and indexes).")
+            print("Schema `operation` ready (tables, indexes and booking functions).")
         elif args.command == "reset":
             ensure_safe(url, settings.allow_remote, "drop all tables")
             db.drop_schema(url)
@@ -84,6 +90,9 @@ def main(argv: list[str] | None = None) -> int:
             _seed(settings)
             print()
             return _check(settings, args.json)
+        elif args.command == "simulate":
+            # Only adds bookings (never deletes), so no --allow-remote needed.
+            simulate.run(url, args.per_minute, args.duration, seed=args.seed)
         elif args.command == "fingerprint":
             fp = checks.fingerprint(url)
             print(json.dumps(fp, indent=2) if args.json
