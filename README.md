@@ -60,6 +60,15 @@ Expected ending:
 No Python on your machine? Run the seed in a container instead:
 `docker compose run --rm seed all`.
 
+**Neon with Docker.** Put `NEON_OWNER_URL` (role `hospedaplus_owner`, host
+without `-pooler`) and `NEON_APP_URL` (role `app_writer`, `-pooler` host) in
+`.env`, then:
+
+```bash
+docker compose run --rm --build neon-seed   # schema operation + full data + checks on Neon
+docker compose up --build neon-simulator    # continuous direct bookings into Neon (Ctrl+C)
+```
+
 ## Commands
 
 | Command | What it does | Destructive |

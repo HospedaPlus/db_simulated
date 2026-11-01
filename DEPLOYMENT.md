@@ -34,7 +34,15 @@ code is Neon-specific.
 
    The direct host is for the seed, which creates tables and bulk-loads
    with `COPY`.
-2. **Load and check**, from a terminal with the URL set only for that session:
+2. **Load and check with Docker** (no Python needed). Put the URL in your
+   git-ignored `.env` as `NEON_OWNER_URL`, then:
+
+   ```powershell
+   docker compose run --rm --build neon-seed    # init + full seed + 24 checks
+   docker compose run --rm neon-check           # checks again, any time
+   ```
+
+   **Or with Python**, from a terminal with the URL set only for that session:
 
    ```powershell
    $env:DATABASE_URL = "<connection string>"
@@ -155,8 +163,8 @@ $env:DATABASE_URL = "<app_writer URL>"
 python -m seed simulate --per-minute 6     # Ctrl+C to stop
 ```
 
-Or in Docker: put the URL in `.env` as `SIM_DATABASE_URL` and run
-`docker compose up simulator`. On AWS it is the same image as the seed
+Or in Docker: put the URL in `.env` as `NEON_APP_URL` and run
+`docker compose up neon-simulator`. On AWS it is the same image as the seed
 job, with command `simulate`.
 
 ### Services in AWS
