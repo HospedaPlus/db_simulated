@@ -133,8 +133,8 @@ connection details in the console. Nobody sends passwords over chat.
 | `app_writer` | `postgresql://app_writer:<password>@<endpoint>-pooler.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require` |
 | `hospedaplus_owner` (seed) | `postgresql://hospedaplus_owner:<password>@<endpoint>.c-6.us-east-2.aws.neon.tech/hospedaplus?sslmode=require&channel_binding=require` |
 
-> Port 5432 is Neon's. Your local Docker database uses 5437
-> (`POSTGRES_PORT` in `.env`), so the two never clash.
+> Neon and your local Docker database can both use port 5432: one is on
+> the internet, the other on `localhost`.
 
 ### Pooled or direct host
 
