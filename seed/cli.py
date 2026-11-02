@@ -71,6 +71,11 @@ def main(argv: list[str] | None = None) -> int:
     settings = load_settings(mode=args.mode, seed=args.seed, start_date=args.start_date,
                              allow_remote=args.allow_remote)
     url = settings.database_url
+    if not url.strip():
+        # e.g. `docker compose run neon-seed` with NEON_OWNER_URL missing from .env
+        print("DATABASE_URL is empty. For the neon-* Docker services, set NEON_OWNER_URL "
+              "(and NEON_APP_URL for the simulator) in .env.", file=sys.stderr)
+        return 2
     try:
         if args.command == "init":
             db.init_schema(url)

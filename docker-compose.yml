@@ -2,6 +2,11 @@
 #   docker compose up -d postgres          start the database (schema `operation` is created on first start)
 #   docker compose run --rm seed all       seed it and run the checks
 #   docker compose up simulator            keep direct/corporate bookings arriving (Ctrl+C to stop)
+#
+# Same thing on Neon (URLs in .env, see .env.example):
+#   docker compose run --rm neon-seed      init + full seed + checks, as hospedaplus_owner
+#   docker compose run --rm neon-check     checks only (read-only)
+#   docker compose up neon-simulator       continuous bookings on Neon, as app_writer
 services:
   postgres:
     image: postgres:16-alpine
@@ -42,8 +47,7 @@ services:
     command: ["all"]
 
   # The continuous F3 source: books through operation.reservar() every few seconds.
-  # Run the seed first. Against Neon, set SIM_DATABASE_URL to the app_writer URL
-  # (pooled host) in .env.
+  # Run the seed first.
   simulator:
     build: .
     profiles: ["simulator"]     # started only when you ask for it
@@ -51,7 +55,39 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: ${SIM_DATABASE_URL:-postgresql://hospedaplus:hospedaplus@postgres:5432/hospedaplus}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hospedaplus}:${POSTGRES_PASSWORD:-hospedaplus}@postgres:5432/${POSTGRES_DB:-hospedaplus}
+      SIM_BOOKINGS_PER_MIN: ${SIM_BOOKINGS_PER_MIN:-6}
+    command: ["simulate"]
+    restart: unless-stopped
+
+  # ---- Neon: no local database involved ----------------------------------
+  # Load F3 into Neon: schema `operation`, tables, functions, full data, checks.
+  # NEON_OWNER_URL = role hospedaplus_owner, direct host (no -pooler).
+  neon-seed:
+    build: .
+    profiles: ["neon"]
+    environment:
+      DATABASE_URL: ${NEON_OWNER_URL:-}   # empty -> the seed stops with a clear message
+      SEED_MODE: ${NEON_SEED_MODE:-full}
+      SEED_RANDOM_SEED: ${SEED_RANDOM_SEED:-42}
+      SEED_START_DATE: ${SEED_START_DATE:-}
+    command: ["all", "--allow-remote"]   # Neon is remote: replacing data must be explicit
+
+  # Read-only health checks on Neon (24 checks).
+  neon-check:
+    build: .
+    profiles: ["neon"]
+    environment:
+      DATABASE_URL: ${NEON_OWNER_URL:-}
+    command: ["check"]
+
+  # The continuous F3 source writing to Neon, with the least-privileged writer.
+  # NEON_APP_URL = role app_writer, pooled host (-pooler).
+  neon-simulator:
+    build: .
+    profiles: ["neon"]
+    environment:
+      DATABASE_URL: ${NEON_APP_URL:-}
       SIM_BOOKINGS_PER_MIN: ${SIM_BOOKINGS_PER_MIN:-6}
     command: ["simulate"]
     restart: unless-stopped
