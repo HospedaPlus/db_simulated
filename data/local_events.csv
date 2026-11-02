@@ -1,0 +1,34 @@
+hotel_code,name,start_date,end_date,category
+HP-BR-002,Gran Premio de Brasil F1 (Interlagos),2026-11-05,2026-11-08,high
+HP-PT-001,Web Summit Lisboa,2026-11-09,2026-11-12,high
+HP-MX-004,Feria Internacional del Libro de Guadalajara,2026-11-28,2026-12-06,high
+HP-CO-003,Temporada de fin de ano Cartagena,2026-12-20,2027-01-06,medium
+HP-CO-002,Temporada de fin de ano Cartagena,2026-12-20,2027-01-06,high
+HP-CO-008,Feria de Cali,2026-12-25,2026-12-30,high
+HP-MX-001,Ano Nuevo Cancun,2026-12-27,2027-01-02,high
+HP-MX-002,Ano Nuevo Riviera Maya,2026-12-27,2027-01-02,high
+HP-BR-001,Reveillon de Copacabana,2026-12-29,2027-01-01,high
+HP-PT-002,Ano Nuevo Algarve,2026-12-29,2027-01-01,medium
+HP-ES-001,Navidad y Ano Nuevo Madrid,2026-12-22,2027-01-01,medium
+HP-CO-009,Temporada alta de fin de ano San Andres,2026-12-26,2027-01-08,medium
+HP-BR-004,Verano Florianopolis,2027-01-02,2027-01-31,medium
+HP-CO-003,Festival Internacional de Musica de Cartagena,2027-01-07,2027-01-11,medium
+HP-ES-001,FITUR Madrid,2027-01-20,2027-01-24,high
+HP-CO-003,Hay Festival Cartagena,2027-01-28,2027-01-31,medium
+HP-BR-001,Carnaval de Rio de Janeiro,2027-02-05,2027-02-10,high
+HP-BR-003,Carnaval de Salvador,2027-02-04,2027-02-10,high
+HP-BR-005,Carnaval de Recife y Olinda,2027-02-05,2027-02-10,medium
+HP-CO-001,Carnaval de Barranquilla,2027-02-06,2027-02-09,high
+HP-ES-003,Carnaval de Santa Cruz de Tenerife,2027-02-05,2027-02-14,high
+HP-ES-002,Mobile World Congress Barcelona,2027-03-01,2027-03-04,high
+HP-CO-005,Festival Estereo Picnic Bogota,2027-03-19,2027-03-21,medium
+HP-CO-006,Festival Estereo Picnic Bogota,2027-03-19,2027-03-21,low
+HP-MX-006,Spring break Los Cabos,2027-03-13,2027-03-28,medium
+HP-MX-005,Festival Pa'l Norte Monterrey,2027-03-26,2027-03-28,medium
+HP-MX-003,Semana Santa Ciudad de Mexico,2027-03-21,2027-03-28,low
+HP-PT-003,Festa de Sao Joao do Porto,2027-06-22,2027-06-24,high
+HP-CO-004,Fiestas del Mar Santa Marta,2027-07-24,2027-07-29,medium
+HP-CO-007,Feria de las Flores Medellin,2027-07-30,2027-08-08,high
+HP-CO-010,Fiestas de la Cosecha Pereira,2027-08-14,2027-08-22,low
+HP-BR-006,Festival Folclorico de Parintins (salidas desde Manaus),2027-06-25,2027-06-27,low
+HP-MX-003,Dia de Muertos Ciudad de Mexico,2027-10-30,2027-11-02,high

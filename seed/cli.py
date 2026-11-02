@@ -7,6 +7,7 @@
     reset        drop every table (destructive)
     fingerprint  print a hash per table to compare two runs
     simulate     keep direct/corporate bookings arriving (continuous source)
+    events       load the F6 local events CSV and refresh the overbooking limits
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from datetime import date
 
 import psycopg
 
-from . import checks, db, simulate
+from . import checks, db, events, simulate
 from .config import MODES, load_settings
 from .generator import generate
 from .safety import RemoteDatabaseError, ensure_safe, redact
@@ -28,7 +29,7 @@ from .safety import RemoteDatabaseError, ensure_safe, redact
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m seed", description="HospedaPlus F3 database seed")
-    p.add_argument("command", choices=["init", "seed", "check", "all", "reset", "fingerprint", "simulate"])
+    p.add_argument("command", choices=["init", "seed", "check", "all", "reset", "fingerprint", "simulate", "events"])
     p.add_argument("--mode", choices=sorted(MODES), help="dev (small) or full (default: SEED_MODE or dev)")
     p.add_argument("--seed", type=int, help="random seed (default: SEED_RANDOM_SEED or 42)")
     p.add_argument("--start-date", type=date.fromisoformat,
@@ -98,6 +99,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "simulate":
             # Only adds bookings (never deletes), so no --allow-remote needed.
             simulate.run(url, args.per_minute, args.duration, seed=args.seed)
+        elif args.command == "events":
+            # Only replaces the small events table (reference data), so no --allow-remote needed.
+            loaded, changed = events.load_events(url)
+            print(f"Loaded {loaded} local events into {redact(url)}; "
+                  f"overbooking limits changed on {changed:,} inventory nights")
         elif args.command == "fingerprint":
             fp = checks.fingerprint(url)
             print(json.dumps(fp, indent=2) if args.json
@@ -105,6 +111,9 @@ def main(argv: list[str] | None = None) -> int:
     except RemoteDatabaseError as exc:
         print(f"Stopped: {exc}", file=sys.stderr)
         return 2
+    except ValueError as exc:  # invalid events CSV
+        print(f"Invalid events file: {exc}", file=sys.stderr)
+        return 1
     except psycopg.errors.UndefinedTable:
         print("Tables are missing. Run `python -m seed init` (or `all`) first.", file=sys.stderr)
         return 1

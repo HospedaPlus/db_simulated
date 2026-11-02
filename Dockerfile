@@ -15,6 +15,7 @@ RUN pip install "psycopg[binary]>=3.2,<4" tzdata
 COPY seed/ seed/
 COPY sql/ sql/
 COPY catalog/ catalog/
+COPY data/ data/
 
 # Don't run as root.
 RUN useradd --create-home --uid 10001 seeder
