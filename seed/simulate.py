@@ -104,8 +104,42 @@ def cancel_one(conn: psycopg.Connection, rng: random.Random) -> str | None:
     return f"{result:<9} {code} {hours} h before check-in, penalty {pct}% = {amount} {currency}"
 
 
+def inject_defect(conn: psycopg.Connection, rng: random.Random, zero_guests_rate: float,
+                  invalid_dates_rate: float) -> str | None:
+    """Statement 5.3: now and then copy the latest F3 booking into
+    reservation_anomalies with zero guests or check-out before check-in,
+    like the seed does, so the continuous source keeps sending dirty rows."""
+    roll = rng.random()
+    if roll < zero_guests_rate:
+        defect = "zero_guests"
+    elif roll < zero_guests_rate + invalid_dates_rate:
+        defect = "checkout_before_checkin"
+    else:
+        return None
+    row = conn.execute(
+        "SELECT hotel_id, room_type_id, channel_id, guest_id, check_in, check_out, adults, children, "
+        "infants, currency, total_amount FROM operation.reservations WHERE source = 'F3' "
+        "ORDER BY id DESC LIMIT 1").fetchone()
+    if row is None:
+        return None
+    hotel, rt, channel, guest, check_in, check_out, adults, children, infants, currency, total = row
+    if defect == "zero_guests":
+        adults = children = infants = 0
+    else:
+        check_out = check_in - timedelta(days=rng.randint(1, 3))
+    code = f"F3X-S{uuid.uuid4().hex[:10].upper()}"
+    conn.execute(
+        "INSERT INTO operation.reservation_anomalies (code, hotel_id, room_type_id, channel_id, guest_id, "
+        "check_in, check_out, adults, children, infants, currency, total_amount, defect_type) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (code, hotel, rt, channel, guest, check_in, check_out, adults, children, infants, currency,
+         total, defect))
+    return f"anomaly   {code} {defect}"
+
+
 def run(url: str, per_minute: float, duration: float = 0, cancel_share: float = CANCEL_SHARE,
-        seed: int | None = None) -> dict:
+        seed: int | None = None, zero_guests_rate: float = 0.02,
+        invalid_dates_rate: float = 0.02) -> dict:
     """Loop until Ctrl+C (or `duration` seconds). Returns a count per result."""
     rng = random.Random(seed)
     pause = 60.0 / per_minute
@@ -125,6 +159,10 @@ def run(url: str, per_minute: float, duration: float = 0, cancel_share: float = 
                 key = line.split()[0]
                 stats[key] = stats.get(key, 0) + 1
                 print(f"{datetime.now():%H:%M:%S} {line}", flush=True)
+                defect = inject_defect(conn, rng, zero_guests_rate, invalid_dates_rate)
+                if defect:
+                    stats["anomaly"] = stats.get("anomaly", 0) + 1
+                    print(f"{datetime.now():%H:%M:%S} {defect}", flush=True)
                 time.sleep(pause)
         except KeyboardInterrupt:
             pass

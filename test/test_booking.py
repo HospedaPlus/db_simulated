@@ -231,3 +231,13 @@ def test_modify_edge_cases(url):
     assert _modify(url, "MOD-4", occurred_at=t1 - timedelta(seconds=30))[0] == "stale"  # older event
     q(url, "SELECT operation.cancelar('MOD-4')")
     assert _modify(url, "MOD-4", occurred_at=t1 + timedelta(minutes=1))[0] == "not_modifiable"
+
+
+def test_simulator_injects_defects(url):
+    stats = simulate.run(url, per_minute=6000, duration=1, seed=2,
+                         zero_guests_rate=0.5, invalid_dates_rate=0.5)
+    assert stats.get("anomaly", 0) > 0
+    with psycopg.connect(url) as conn:
+        bad = conn.execute("SELECT count(*) FROM operation.reservation_anomalies WHERE code LIKE 'F3X-S%' "
+                           "AND NOT ((adults + children + infants = 0) OR check_out < check_in)").fetchone()[0]
+    assert bad == 0

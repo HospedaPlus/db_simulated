@@ -98,7 +98,9 @@ def main(argv: list[str] | None = None) -> int:
             return _check(settings, args.json)
         elif args.command == "simulate":
             # Only adds bookings (never deletes), so no --allow-remote needed.
-            simulate.run(url, args.per_minute, args.duration, seed=args.seed)
+            simulate.run(url, args.per_minute, args.duration, seed=args.seed,
+                         zero_guests_rate=settings.zero_guests_rate,
+                         invalid_dates_rate=settings.invalid_dates_rate)
         elif args.command == "events":
             # Only replaces the small events table (reference data), so no --allow-remote needed.
             loaded, changed = events.load_events(url)
