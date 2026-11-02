@@ -80,6 +80,7 @@ docker compose up --build neon-simulator    # continuous direct bookings into Ne
 | `python -m seed reset` | Drops every table (use after changing `schema.sql`) | Yes |
 | `python -m seed fingerprint` | md5 per table, to prove two runs are identical | No |
 | `python -m seed simulate` | Keeps direct/corporate bookings arriving through `reservar()` | No (adds rows) |
+| `python -m seed events` | Loads `data/local_events.csv` (F6b) into `operation.local_events` and refreshes overbooking limits (0 on "high" events) | Replaces only the events table |
 
 Options: `--mode dev|full`, `--seed 42`, `--start-date 2026-10-14`,
 `--allow-remote`, `--json` (for `check` and `fingerprint`),
