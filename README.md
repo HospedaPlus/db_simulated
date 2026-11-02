@@ -52,7 +52,7 @@ If PowerShell refuses to run `Activate.ps1`, allow local scripts once with
 Expected ending:
 
 ```
-  PASS  inventory available = total - sold  none found
+  PASS  inventory sold = confirmed bookings  none found
   ...
   24/24 checks passed
 ```
@@ -194,9 +194,9 @@ would break the constraints, so they go to `reservation_anomalies`
 # unit tests only (no database needed)
 pytest
 # plus database tests: point to a throwaway database, it gets wiped
-TEST_DATABASE_URL=postgresql://hospedaplus:hospedaplus@localhost:5437/hospedaplus_test pytest
+TEST_DATABASE_URL=postgresql://hospedaplus:hospedaplus@localhost:5432/hospedaplus_test pytest
 # PowerShell:
-# $env:TEST_DATABASE_URL="postgresql://hospedaplus:hospedaplus@localhost:5437/hospedaplus_test"; pytest
+# $env:TEST_DATABASE_URL="postgresql://hospedaplus:hospedaplus@localhost:5432/hospedaplus_test"; pytest
 ```
 
 Create the test database once with
@@ -265,6 +265,63 @@ Remove-Item Env:DATABASE_URL     # back to your local database
 - Roles, pooled vs direct host, DBeaver/psql and setup: see
   [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
+## One database, two schemas (F2 + F3)
+
+```
+Neon · database hospedaplus (branches development and production)
+├── schema operation   ← this repo (F3): hotels, inventory, rates, guests, reservations,
+│                        reservar() / liberar() / penalidad() / cancelar()
+└── schema streaming   ← buenavista-streaming (F2): reservation_event_ledger (Kafka events)
+```
+
+- **F3 → `operation`.** Loaded by the seed, then kept alive by the simulator
+  (direct and corporate bookings through `reservar()`).
+- **F2 → `streaming`.** The Kafka consumer stores every OTA event in the
+  ledger. **Still to do in F2:** in the same transaction as the ledger
+  insert, apply the event to `operation`, so OTA bookings take rooms from
+  the same inventory:
+
+  | F2 event | Call in `operation` |
+  |---|---|
+  | `reservation.created` | `reservar(channel_code, reservation_id, hotel_id, room_type, guest_ref, check_in, check_out, 1, guests, refundable, 0, 0, nightly_rate, occurred_at)` |
+  | `reservation.updated` (new dates or room type) | not yet: needs a `modificar()` function here (free the old nights and take the new ones in one step), because `reservar()` treats a known `reservation_id` as `already_exists` |
+  | `reservation.cancelled` | `cancelar('F2-' \|\| reservation_id, occurred_at)` |
+  | `reservation.no_show` | `liberar('F2-' \|\| reservation_id, 'no_show')` |
+
+  `result = 'rejected'` means the hotel was full: the rejection is already in
+  `reservation_rejections` (RN-04), so the consumer commits and moves on.
+  The consumer must connect as `app_writer`, and F3 must be loaded in the
+  same Neon branch first.
+
+## Deploying F3
+
+The database is already managed (Neon), so deploying F3 means running two
+jobs with the image in this repo's `Dockerfile`:
+
+| What | When | How | Role (URL) |
+|---|---|---|---|
+| **Seed** (`all --allow-remote`) | once per branch, or to reset the data | laptop: `docker compose run --rm neon-seed` · AWS: one-off **ECS Fargate task** | `hospedaplus_owner`, direct host |
+| **Simulator** (`simulate`) | all the time during the demo (F3 is a continuous source) | laptop/EC2: `docker compose up -d neon-simulator` · AWS: **ECS Fargate service**, 1 task | `app_writer`, `-pooler` host |
+
+On AWS:
+
+1. Build and push the image to ECR (`docker build -t hospedaplus-f3 .`,
+   then tag and push to `<account>.dkr.ecr.us-east-2.amazonaws.com/hospedaplus-f3`).
+2. Store the two URLs in **Secrets Manager** (`hospedaplus/neon/owner`,
+   `hospedaplus/neon/app_writer`); each task definition maps its secret to
+   `DATABASE_URL`. Never put a URL in the image or the repo.
+3. Seed task: command `["all", "--allow-remote"]`, `SEED_MODE=full`, run it
+   once and check the logs end with `24/24 checks passed`.
+4. Simulator service: command `["simulate"]`, `SIM_BOOKINGS_PER_MIN=6`,
+   desired count 1 (two copies would just double the rate). Logs go to
+   CloudWatch, one line per booking.
+5. Airflow's bronze worker reads `operation` with `etl_reader`, incrementally
+   by `created_at`.
+
+The same steps work against `development` first and `production` after.
+The simulator keeps Neon's compute awake, so stop it (desired count 0) when
+you are not demoing.
+
 ## How it fits the project
 
 ```
@@ -307,6 +364,7 @@ sql/            schema.sql, indexes.sql, functions.sql, reset.sql
 seed/           Python package (python -m seed)
 test/           unit + database tests (test_booking.py: reservar() and friends)
 DEPLOYMENT.md   Neon: load, roles, connections, simulator
+Readmeexe.md    quick guide in Spanish: run everything on Neon with Docker
 Dockerfile      seed job image (local and ECS Fargate)
 docker-compose.yml, .env.example, .github/workflows/ci.yml
 ```
