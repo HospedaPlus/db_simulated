@@ -171,3 +171,63 @@ def test_simulator_keeps_bookings_coming(url):
     with psycopg.connect(url, autocommit=True) as conn:
         assert simulate.extend_calendar(conn, TODAY + timedelta(days=simulate.HORIZON_DAYS)) == 0
         assert simulate.extend_calendar(conn, TODAY + timedelta(days=simulate.HORIZON_DAYS + 1)) == 112
+
+
+def _sold(url, hotel, room_type, night):
+    return q(url, """SELECT sold_rooms FROM operation.inventory i
+                     JOIN operation.hotels h ON h.id = i.hotel_id
+                     JOIN operation.room_types t ON t.id = i.room_type_id
+                     WHERE h.code = %s AND t.code = %s AND i.inventory_date = %s""",
+             (hotel, room_type, night))[0][0]
+
+
+def _modify(url, external, **kw):
+    args = dict(room_type=None, check_in=None, check_out=None, occurred_at=None)
+    args.update(kw)
+    return q(url, """SELECT * FROM operation.modificar('direct_web', %s, %s, %s, %s,
+                     NULL, NULL, NULL, NULL, NULL, coalesce(%s, now()))""",
+             (external, args["room_type"], args["check_in"], args["check_out"], args["occurred_at"]))[0]
+
+
+def test_modify_moves_the_nights(url):
+    """New dates: the old nights are freed and the new ones taken, in one step."""
+    old, new = TODAY + timedelta(days=70), TODAY + timedelta(days=80)
+    before_old, before_new = _sold(url, "HP-MX-002", "DOUBLE", old), _sold(url, "HP-MX-002", "DOUBLE", new)
+    book(url, "MOD-1", hotel="HP-MX-002", check_in=old, nights=1)
+    result = _modify(url, "MOD-1", check_in=new, check_out=new + timedelta(days=1))
+    assert result[0] == "modified"
+    assert _sold(url, "HP-MX-002", "DOUBLE", old) == before_old
+    assert _sold(url, "HP-MX-002", "DOUBLE", new) == before_new + 1
+    assert q(url, "SELECT check_in FROM operation.reservations WHERE code = 'MOD-1'")[0][0] == new
+
+
+def test_modify_without_room_changes_nothing(url):
+    """New stay is full: rejected, stored in rejections, booking and inventory as they were."""
+    old, full = TODAY + timedelta(days=90), TODAY + timedelta(days=91)
+    book(url, "MOD-2", hotel="HP-MX-003", check_in=old, nights=1)
+    set_night(url, "HP-MX-003", "DOUBLE", full, free=0, limit=0)
+    sold_old = _sold(url, "HP-MX-003", "DOUBLE", old)
+    result = _modify(url, "MOD-2", check_in=full, check_out=full + timedelta(days=1))
+    assert result[0] == "rejected" and result[2] == [full]
+    assert _sold(url, "HP-MX-003", "DOUBLE", old) == sold_old
+    assert q(url, "SELECT check_in FROM operation.reservations WHERE code = 'MOD-2'")[0][0] == old
+    assert q(url, "SELECT count(*) FROM operation.reservation_rejections WHERE external_code = 'MOD-2'")[0][0] == 1
+
+
+def test_modify_room_type_on_same_nights(url):
+    night = TODAY + timedelta(days=95)
+    book(url, "MOD-3", hotel="HP-BR-002", check_in=night, nights=2)
+    double, suite = _sold(url, "HP-BR-002", "DOUBLE", night), _sold(url, "HP-BR-002", "SUITE", night)
+    assert _modify(url, "MOD-3", room_type="SUITE")[0] == "modified"
+    assert _sold(url, "HP-BR-002", "DOUBLE", night) == double - 1
+    assert _sold(url, "HP-BR-002", "SUITE", night) == suite + 1
+
+
+def test_modify_edge_cases(url):
+    assert _modify(url, "NEVER-CREATED")[0] == "not_found"        # arrived before 'created'
+    book(url, "MOD-4", hotel="HP-ES-003")
+    t1 = datetime.now(timezone.utc) + timedelta(minutes=1)
+    assert _modify(url, "MOD-4", occurred_at=t1)[0] == "modified"
+    assert _modify(url, "MOD-4", occurred_at=t1 - timedelta(seconds=30))[0] == "stale"  # older event
+    q(url, "SELECT operation.cancelar('MOD-4')")
+    assert _modify(url, "MOD-4", occurred_at=t1 + timedelta(minutes=1))[0] == "not_modifiable"

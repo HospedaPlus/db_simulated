@@ -6,6 +6,7 @@ lives in exactly one place. They take catalog codes (HP-CO-001, DOUBLE,
 expedia, G-0000001), never internal ids.
 
     reservar()                    book, or record a rejection (RN-03, RN-04)
+    modificar()                   change dates/room type/rooms: old nights out, new nights in, or nothing
     liberar()                     give the nights back (cancelled, no_show, relocated, duplicate)
     penalidad()                   what a cancellation would cost now (RN-07), changes nothing
     cancelar()                    cancel: store the penalty and free the nights
@@ -161,6 +162,153 @@ BEGIN
     RETURNING id INTO v_new_id;
 
     RETURN QUERY SELECT 'confirmed'::TEXT, v_code, v_new_id, '{}'::DATE[];
+END;
+$$;
+
+
+/* modificar(): a channel changes a confirmed booking (new dates, room type,
+rooms or guests). Frees the old nights and takes the new ones in one step:
+if the new nights have no room, nothing changes, the rejection is stored
+(RN-04) and result = 'rejected'. NULL arguments keep the current value.
+
+    result = 'modified'        done
+             'rejected'        no room for the new stay; booking unchanged
+             'not_found'       the channel never created it here (an event that
+                               arrived before its 'created': keep it pending)
+             'not_modifiable'  cancelled, no-show, relocated or duplicate
+             'stale'           p_occurred_at is older than the last applied event */
+CREATE OR REPLACE FUNCTION modificar(
+    p_channel       TEXT,
+    p_external_code TEXT,
+    p_room_type     TEXT DEFAULT NULL,
+    p_check_in      DATE DEFAULT NULL,
+    p_check_out     DATE DEFAULT NULL,
+    p_rooms         INTEGER DEFAULT NULL,
+    p_adults        INTEGER DEFAULT NULL,
+    p_children      INTEGER DEFAULT NULL,
+    p_infants       INTEGER DEFAULT NULL,
+    p_nightly_rate  NUMERIC DEFAULT NULL,
+    p_occurred_at   TIMESTAMPTZ DEFAULT NOW()
+) RETURNS TABLE (result TEXT, reservation_code TEXT, nights_without_room DATE[])
+LANGUAGE plpgsql
+SET search_path = operation, pg_temp
+AS $$
+#variable_conflict use_column
+DECLARE
+    v_channel channels%ROWTYPE;
+    r         reservations%ROWTYPE;
+    v_type    room_types%ROWTYPE;
+    v_cur     TEXT;
+    v_in      DATE;
+    v_out     DATE;
+    v_rooms   INTEGER;
+    v_adults  INTEGER;
+    v_children INTEGER;
+    v_infants INTEGER;
+    v_nights  INTEGER;
+    v_found   INTEGER;
+    v_full    DATE[];
+    v_rates   NUMERIC[];
+    v_first   NUMERIC;
+    v_total   NUMERIC;
+BEGIN
+    SELECT * INTO v_channel FROM channels WHERE code = p_channel;
+    IF NOT FOUND THEN RAISE EXCEPTION 'unknown channel %', p_channel USING ERRCODE = 'foreign_key_violation'; END IF;
+
+    SELECT * INTO r FROM reservations
+     WHERE channel_id = v_channel.id AND external_code = p_external_code FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'not_found'::TEXT, NULL::TEXT, '{}'::DATE[]; RETURN;
+    END IF;
+    IF r.status <> 'confirmed' THEN
+        RETURN QUERY SELECT 'not_modifiable'::TEXT, r.code::TEXT, '{}'::DATE[]; RETURN;
+    END IF;
+    IF r.last_event_at IS NOT NULL AND p_occurred_at <= r.last_event_at THEN
+        RETURN QUERY SELECT 'stale'::TEXT, r.code::TEXT, '{}'::DATE[]; RETURN;
+    END IF;
+
+    IF p_room_type IS NULL THEN
+        SELECT * INTO v_type FROM room_types WHERE id = r.room_type_id;
+    ELSE
+        SELECT * INTO v_type FROM room_types WHERE code = p_room_type;
+        IF NOT FOUND THEN RAISE EXCEPTION 'unknown room type %', p_room_type USING ERRCODE = 'foreign_key_violation'; END IF;
+    END IF;
+    SELECT currency INTO v_cur FROM hotels WHERE id = r.hotel_id;
+    v_in := coalesce(p_check_in, r.check_in);
+    v_out := coalesce(p_check_out, r.check_out);
+    v_rooms := coalesce(p_rooms, r.rooms_count);
+    v_adults := coalesce(p_adults, r.adults);
+    v_children := coalesce(p_children, r.children);
+    v_infants := coalesce(p_infants, r.infants);
+    v_nights := v_out - v_in;
+    IF v_nights < 1 THEN
+        RAISE EXCEPTION 'check-out % must be after check-in %', v_out, v_in USING ERRCODE = 'check_violation';
+    END IF;
+    IF v_rooms < 1 OR v_adults + v_children > v_type.max_guests * v_rooms THEN
+        RAISE EXCEPTION '% guests do not fit in % % room(s)', v_adults + v_children, v_rooms, v_type.code
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    -- Lock old and new nights together, always in the same order (no deadlocks).
+    PERFORM 1 FROM inventory
+      WHERE hotel_id = r.hotel_id
+        AND ((room_type_id = r.room_type_id AND inventory_date >= r.check_in AND inventory_date < r.check_out)
+          OR (room_type_id = v_type.id AND inventory_date >= v_in AND inventory_date < v_out))
+      ORDER BY room_type_id, inventory_date FOR UPDATE;
+
+    -- Free the old nights, then check the new ones.
+    UPDATE inventory SET sold_rooms = sold_rooms - r.rooms_count
+     WHERE hotel_id = r.hotel_id AND room_type_id = r.room_type_id
+       AND inventory_date >= r.check_in AND inventory_date < r.check_out;
+
+    SELECT count(*), coalesce(array_agg(inventory_date ORDER BY inventory_date)
+                              FILTER (WHERE available_rooms < v_rooms), '{}')
+      INTO v_found, v_full
+      FROM inventory
+     WHERE hotel_id = r.hotel_id AND room_type_id = v_type.id
+       AND inventory_date >= v_in AND inventory_date < v_out;
+
+    IF v_found <> v_nights OR cardinality(v_full) > 0 THEN
+        -- No room: put the old nights back, keep the booking as it was.
+        UPDATE inventory SET sold_rooms = sold_rooms + r.rooms_count
+         WHERE hotel_id = r.hotel_id AND room_type_id = r.room_type_id
+           AND inventory_date >= r.check_in AND inventory_date < r.check_out;
+        INSERT INTO reservation_rejections (source, channel_id, external_code, hotel_id, room_type_id,
+                                            check_in, check_out, rooms_count, reason, nights_without_room)
+        VALUES (v_channel.source, v_channel.id, p_external_code, r.hotel_id, v_type.id, v_in, v_out, v_rooms,
+                CASE WHEN v_found <> v_nights THEN 'no_inventory' ELSE 'no_room' END, v_full);
+        RETURN QUERY SELECT 'rejected'::TEXT, r.code::TEXT, v_full; RETURN;
+    END IF;
+
+    UPDATE inventory SET sold_rooms = sold_rooms + v_rooms
+     WHERE hotel_id = r.hotel_id AND room_type_id = v_type.id
+       AND inventory_date >= v_in AND inventory_date < v_out;
+
+    -- Re-price: the channel's rate if given, otherwise the rates table.
+    IF p_nightly_rate IS NOT NULL THEN
+        v_first := round_money(p_nightly_rate * v_rooms, v_cur);
+        v_total := round_money(p_nightly_rate * v_nights * v_rooms, v_cur);
+    ELSE
+        SELECT array_agg(round_money(rt.amount * CASE WHEN v_channel.channel_type = 'corporate'
+                                                      THEN 0.90 ELSE 1 END, v_cur) ORDER BY d.night)
+          INTO v_rates
+          FROM generate_series(v_in, v_out - 1, interval '1 day') AS d(night)
+          JOIN rates rt ON rt.hotel_id = r.hotel_id AND rt.room_type_id = v_type.id
+                       AND d.night::date BETWEEN rt.valid_from AND rt.valid_to;
+        IF coalesce(cardinality(v_rates), 0) <> v_nights THEN
+            RAISE EXCEPTION 'no rate for some night of % %..%', v_type.code, v_in, v_out;
+        END IF;
+        v_first := round_money(v_rates[1] * v_rooms, v_cur);
+        v_total := round_money((SELECT sum(x) FROM unnest(v_rates) x) * v_rooms, v_cur);
+    END IF;
+
+    UPDATE reservations
+       SET room_type_id = v_type.id, check_in = v_in, check_out = v_out, rooms_count = v_rooms,
+           adults = v_adults, children = v_children, infants = v_infants,
+           first_night_amount = v_first, total_amount = v_total, last_event_at = p_occurred_at
+     WHERE id = r.id;
+
+    RETURN QUERY SELECT 'modified'::TEXT, r.code::TEXT, '{}'::DATE[];
 END;
 $$;
 

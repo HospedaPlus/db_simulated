@@ -149,6 +149,7 @@ don't book twice. Its companions:
 
 | Function | What it does |
 |---|---|
+| `modificar(channel, external_code, room_type, check_in, check_out, ...)` | a channel changes a booking: old nights freed and new ones taken in one step; `rejected` (booking unchanged) if the new stay has no room; `not_found`, `stale` or `not_modifiable` otherwise. NULL keeps a value |
 | `liberar(code, status)` | `cancelled`, `no_show`, `relocated` or `duplicate`: gives the nights back (only once) |
 | `penalidad(code, at)` | what cancelling at `at` would cost (RN-07, check-in 15:00 hotel time); changes nothing |
 | `cancelar(code, at)` | cancels, stores `penalty_amount` and frees the nights |
@@ -177,7 +178,7 @@ would break the constraints, so they go to `reservation_anomalies`
 
 `python -m seed check` exits with code 0 only if all of these pass:
 
-- connectivity; all 14 tables and the 5 booking functions in `operation`
+- connectivity; all 14 tables and the 6 booking functions in `operation`
 - counts: 28 hotels, 4,000 rooms, 4 room types, 21 channels, 60,000+ guests,
   16 cancellation-policy rows, data in the rest
 - hotels, channels (with their source) and room types identical to the shared catalog
@@ -284,7 +285,7 @@ Neon · database hospedaplus (branches development and production)
   | F2 event | Call in `operation` |
   |---|---|
   | `reservation.created` | `reservar(channel_code, reservation_id, hotel_id, room_type, guest_ref, check_in, check_out, 1, guests, refundable, 0, 0, nightly_rate, occurred_at)` |
-  | `reservation.updated` (new dates or room type) | not yet: needs a `modificar()` function here (free the old nights and take the new ones in one step), because `reservar()` treats a known `reservation_id` as `already_exists` |
+  | `reservation.updated` | `modificar(channel_code, reservation_id, room_type, check_in, check_out, 1, guests, 0, 0, nightly_rate, occurred_at)`; `not_found` = the update arrived before the creation: keep it pending in `streaming` and apply it after `reservar()` |
   | `reservation.cancelled` | `cancelar('F2-' \|\| reservation_id, occurred_at)` |
   | `reservation.no_show` | `liberar('F2-' \|\| reservation_id, 'no_show')` |
 
