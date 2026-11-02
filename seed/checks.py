@@ -22,7 +22,7 @@ FINGERPRINT_TABLES = [
 # Written by the running system (reservar(), DAGs, F6), empty after a seed.
 SYSTEM_TABLES = ["reservation_rejections", "relocations", "local_events", "cancellation_rate_by_lead"]
 REQUIRED_TABLES = FINGERPRINT_TABLES + SYSTEM_TABLES
-REQUIRED_FUNCTIONS = ["reservar", "liberar", "penalidad", "cancelar", "refresh_overbooking_limits"]
+REQUIRED_FUNCTIONS = ["reservar", "modificar", "liberar", "penalidad", "cancelar", "refresh_overbooking_limits"]
 POLICY_ROWS = 16  # RN-07: 4 rules x 4 channel types
 
 

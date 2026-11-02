@@ -17,7 +17,7 @@ DROP TABLE IF EXISTS relocations, reservation_rejections, reservation_anomalies,
     inventory, rates, rooms, guests, channels, hotels, room_types,
     cancellation_policies, local_events, cancellation_rate_by_lead CASCADE;
 
-DROP FUNCTION IF EXISTS reservar, liberar, penalidad, cancelar, refresh_overbooking_limits,
+DROP FUNCTION IF EXISTS reservar, modificar, liberar, penalidad, cancelar, refresh_overbooking_limits,
     round_money, lead_bucket, reservations_no_past_check_in CASCADE;
 
 COMMIT;
