@@ -1,6 +1,6 @@
 """F6 local events CSV: validation (always) and loading into Neon (needs TEST_DATABASE_URL)."""
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 import psycopg
 import pytest
