@@ -1,6 +1,7 @@
 # CI/CD I — Aplicaciones (complementa ci.yml, que corre las pruebas)
 #   PR a main   : lint + build de la imagen Docker (no publica)
 #   push a main : publica la imagen versionada en GHCR y despliega en la EC2 de fuentes
+#                 (si cambió data/local_events.csv, recarga los eventos F6b en Neon)
 #   tag vX.Y.Z  : igual, y la imagen queda con la versión
 # El despliegue queda APAGADO hasta que existan los secretos DEPLOY_SSH_KEY y SOURCES_HOST.
 name: cd
@@ -85,4 +86,9 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
           ssh -i ~/.ssh/deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 "$SSH_USER@$HOST" \
-            'cd ~/db_simulated && git pull --ff-only && docker compose --profile neon up -d --build neon-simulator'
+            'cd ~/db_simulated && OLD=$(git rev-parse HEAD) && git pull --ff-only \
+            && docker compose --profile neon up -d --build neon-simulator \
+            && if ! git diff --quiet "$OLD" HEAD -- data/local_events.csv; then \
+                 echo "local_events.csv cambió: recargando F6b"; \
+                 docker compose --profile neon run --rm neon-check events; \
+               fi'
