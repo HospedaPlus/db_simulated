@@ -13,6 +13,7 @@ CREATE INDEX IF NOT EXISTS idx_reservations_channel_id     ON reservations(chann
 CREATE INDEX IF NOT EXISTS idx_reservations_guest_id       ON reservations(guest_id);
 CREATE INDEX IF NOT EXISTS idx_reservations_status_checkin ON reservations(status, check_in);
 CREATE INDEX IF NOT EXISTS idx_reservations_created_at     ON reservations(created_at);  -- incremental extraction
+CREATE INDEX IF NOT EXISTS idx_reservations_updated_at     ON reservations(updated_at);  -- incremental extraction (lake)
 CREATE INDEX IF NOT EXISTS idx_reservations_duplicate_of   ON reservations(duplicate_of);
 
 CREATE INDEX IF NOT EXISTS idx_anomalies_hotel_id          ON reservation_anomalies(hotel_id);

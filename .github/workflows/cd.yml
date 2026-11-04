@@ -87,6 +87,11 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
           ssh -i ~/.ssh/deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 "$SSH_USER@$HOST" \
             'cd ~/db_simulated && OLD=$(git rev-parse HEAD) && git pull --ff-only \
+            && if ! git diff --quiet "$OLD" HEAD -- sql/; then \
+                 echo "sql/ cambió: aplicando esquema en Neon (init no borra nada)"; \
+                 docker compose --profile neon build neon-check \
+                 && docker compose --profile neon run --rm neon-check init; \
+               fi \
             && docker compose --profile neon up -d --build neon-simulator \
             && if ! git diff --quiet "$OLD" HEAD -- data/local_events.csv; then \
                  echo "local_events.csv cambió: recargando F6b"; \
