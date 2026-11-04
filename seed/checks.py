@@ -176,12 +176,13 @@ def run_checks(url: str) -> list[Result]:
 def fingerprint(url: str) -> dict[str, str]:
     """md5 of each table's full content, ordered by id. Two runs with the
     same settings must give identical fingerprints: that's the proof the
-    seed is reproducible."""
+    seed is reproducible. updated_at (time of the last change) is left out:
+    it is wall-clock time, not seed content."""
     with connect(url) as conn, conn.cursor() as cur:
         cur.execute("SET LOCAL TIME ZONE 'UTC'")  # timestamps print the same on any server
         out = {}
         for table in FINGERPRINT_TABLES:
-            out[table] = _one(cur, f"SELECT coalesce(md5(string_agg(t::text, '|' ORDER BY t.id)), '-') "
+            out[table] = _one(cur, f"SELECT coalesce(md5(string_agg((to_jsonb(t) - 'updated_at')::text, '|' ORDER BY t.id)), '-') "
                                    f"FROM {table} t")
         return out
 

@@ -70,3 +70,13 @@ def test_cannot_book_a_night_that_already_passed(seeded):
             conn.execute(insert, ("TEST-YESTERDAY", "TEST-YESTERDAY", -1))
         conn.execute(insert, ("TEST-TODAY", "TEST-TODAY", 0))  # same-day booking is allowed
         conn.rollback()
+
+
+def test_updated_at_moves_on_every_change(seeded):
+    with psycopg.connect(seeded.database_url) as conn:
+        rid, before = conn.execute(
+            "SELECT id, updated_at FROM operation.reservations WHERE status = 'confirmed' LIMIT 1").fetchone()
+        conn.execute("UPDATE operation.reservations SET status = 'no_show' WHERE id = %s", (rid,))
+        after = conn.execute("SELECT updated_at FROM operation.reservations WHERE id = %s", (rid,)).fetchone()[0]
+        conn.rollback()
+    assert after > before

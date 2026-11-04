@@ -198,6 +198,24 @@ CREATE OR REPLACE TRIGGER trg_reservations_no_past_check_in
     BEFORE INSERT OR UPDATE OF check_in, created_at, hotel_id ON reservations
     FOR EACH ROW EXECUTE FUNCTION reservations_no_past_check_in();
 
+/* updated_at: when the row last changed in this database, whatever the change
+(new booking, cancellation, no-show, relocation, late OTA event). The lake
+copies reservations incrementally by this column, so a change is never missed
+even when the event itself happened earlier (last_event_at). Existing rows
+take the time the column is added. */
+ALTER TABLE reservations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+CREATE OR REPLACE FUNCTION reservations_touch_updated_at() RETURNS trigger AS $$
+BEGIN
+    NEW.updated_at := clock_timestamp();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_reservations_updated_at
+    BEFORE UPDATE ON reservations
+    FOR EACH ROW EXECUTE FUNCTION reservations_touch_updated_at();
+
 /*
 Deliberately broken bookings (statement 5.3, US-26).
 The checks above would reject them, so they live here instead.
