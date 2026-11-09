@@ -15,7 +15,9 @@ same data.
 - cancellation policies per channel and penalties in the hotel's time zone (RN-07)
 - 60,000+ guests with the same `guest_ref` and loyalty tier as F2's events
 - direct and corporate reservations, with cancellations and no-shows
-- a **simulator** that keeps direct bookings arriving (F3 is a continuous source)
+- a **simulator** that keeps direct bookings (and some bad rows) arriving (F3 is a continuous source)
+- `reservations.updated_at`, set by a trigger on every change, for the lake's incremental extraction
+- 33 local events (F6b) in `data/local_events.csv`, loaded into `operation.local_events`
 - configurable bad rows for the data-quality layer (statement 5.3)
 
 Everything lives in the **`operation`** schema. F2's event ledger sits next
@@ -228,8 +230,12 @@ docker compose up simulator             # same thing in a container
 
 Every few seconds it books a direct or corporate stay through
 `operation.reservar()` (some get `rejected` when the hotel is full), and now
-and then a guest cancels through `operation.cancelar()`. Once a day it puts a
-new night on sale 365 days ahead. Watch it work:
+and then a guest cancels through `operation.cancelar()`. It also keeps
+injecting the bad rows of statement 5.3 into `reservation_anomalies` (zero
+guests, check-out before check-in), at the `SEED_ZERO_GUESTS_RATE` and
+`SEED_INVALID_DATES_RATE` rates, so the data-quality layer sees them every
+day, not only in the seed. Once a day it puts a new night on sale 365 days
+ahead. Watch it work:
 
 ```bash
 docker exec -it hospedaplus-f3-db psql -U hospedaplus -c "SELECT source, status, count(*) FROM operation.reservations WHERE created_at > now() - interval '5 minutes' GROUP BY 1, 2;"
@@ -278,10 +284,12 @@ Neon · database hospedaplus (branches development and production)
 
 - **F3 → `operation`.** Loaded by the seed, then kept alive by the simulator
   (direct and corporate bookings through `reservar()`).
-- **F2 → `streaming`.** The Kafka consumer stores every OTA event in the
-  ledger. **Still to do in F2:** in the same transaction as the ledger
-  insert, apply the event to `operation`, so OTA bookings take rooms from
-  the same inventory:
+- **F2 → `streaming` + `operation`.** The Kafka consumer stores every OTA
+  event in the ledger and, in the same transaction, applies it to
+  `operation`, so OTA bookings take rooms from the same inventory
+  (`buenavista-streaming/src/operation_sink.py`, on by default,
+  `NEON_APPLY_OPERATION=false` turns it off). The F3 code of an OTA booking
+  is `F2-<reservation_id>`:
 
   | F2 event | Call in `operation` |
   |---|---|
@@ -292,13 +300,22 @@ Neon · database hospedaplus (branches development and production)
 
   `result = 'rejected'` means the hotel was full: the rejection is already in
   `reservation_rejections` (RN-04), so the consumer commits and moves on.
-  The consumer must connect as `app_writer`, and F3 must be loaded in the
-  same Neon branch first.
+  An update, cancellation or no-show that arrives before its creation stays
+  pending in the ledger and is replayed once `reservar()` succeeds. The
+  consumer connects as `app_writer`, and F3 (`seed init`) must be loaded in
+  the same Neon branch first.
+- **F4 → `operation`.** The weekly agency loader in `HospedaPlus/hospedaplus-csv`
+  books each row with `reservar('AGxx', ...)`.
 
 ## Deploying F3
 
 The database is already managed (Neon), so deploying F3 means running two
-jobs with the image in this repo's `Dockerfile`:
+jobs with the image in this repo's `Dockerfile`.
+
+**Today** both run with Docker Compose on the team's sources EC2 (Ubuntu,
+us-east-2, next to F2 and F4, in `~/db_simulated`) against Neon
+**production**: `docker compose up -d neon-simulator`. ECS Fargate (below) is
+the target option.
 
 | What | When | How | Role (URL) |
 |---|---|---|---|
@@ -318,7 +335,19 @@ On AWS:
    desired count 1 (two copies would just double the rate). Logs go to
    CloudWatch, one line per booking.
 5. Airflow's bronze worker reads `operation` with `etl_reader`, incrementally
-   by `created_at`.
+   by `updated_at` (see [How it fits the project](#how-it-fits-the-project)).
+
+### CI/CD
+
+- `.github/workflows/ci.yml`: lint and every test against a PostgreSQL 16
+  service, on every push.
+- `.github/workflows/cd.yml`: builds the image on every PR; on merge to
+  `main` (or a `vX.Y.Z` tag) it publishes `ghcr.io/hospedaplus/db_simulated`
+  and deploys over SSH to the sources EC2 (`git pull`; if `sql/` changed,
+  `neon-check init` so the schema reaches Neon; then the simulator is rebuilt). If
+  `data/local_events.csv` changed it also runs `neon-check events`. The
+  deploy stays off until the secrets `DEPLOY_SSH_KEY` and `SOURCES_HOST`
+  exist (`DEPLOY_SSH_USER` is optional, default `ubuntu`).
 
 The same steps work against `development` first and `production` after.
 The simulator keeps Neon's compute awake, so stop it (desired count 0) when
@@ -346,14 +375,20 @@ F1 Kaggle, F6, F7 APIs ─────┘
   cancel with `operation.cancelar()`, show penalties with
   `operation.penalidad()`. The F2 consumer calls them in the same
   transaction as its ledger insert.
-- **Airflow.** `limites_sobreventa_diario`: Spark writes
-  `cancellation_rate_by_lead`, F6 loads `local_events`, then
-  `refresh_overbooking_limits()`. `reubicacion_diaria`: writes
-  `relocations` and calls `liberar(code, 'relocated')`.
-- **Pipeline.** Extracts `reservations`, `reservation_anomalies`,
-  `reservation_rejections` and `relocations` into Bronze (incrementally, by
-  `created_at` / `rejected_at`); Silver must catch the anomalies; personal
-  data in `guests` must be pseudonymized before Gold (RN-11).
+- **Airflow (`HospedaPlus/hospedaplus-pipeline`).** `bronze_neon_f2_f3`
+  copies `reservations` (by `updated_at`) and `reservation_anomalies` every
+  hour; `bronze_neon_full_load` takes a nightly snapshot of `reservations`,
+  `reservation_anomalies`, `inventory`, `relocations` and
+  `reservation_rejections` in one transaction; `bronze_neon_dims` copies the
+  catalog tables (never `guests`: personal data stays in Neon, RN-11);
+  `bronze_f6_events` copies `local_events`. Silver catches the anomalies.
+  `gold_neon_writeback` upserts `cancellation_rate_by_lead` from gold and,
+  only if `NEON_REFRESH_OVERBOOKING=true`, calls
+  `refresh_overbooking_limits()` (off by default, so limits stay at 0).
+- **Local events (F6b).** `python -m seed events` loads
+  `data/local_events.csv`; CD reloads it when the file changes.
+- **Not built yet.** A daily relocation job (write `relocations` and call
+  `liberar(code, 'relocated')`).
 - **Not here.** Dynamic pricing (pickup and event multipliers, RN-05/06)
   and duplicate detection (RN-08: `status = 'duplicate'` and `duplicate_of`
   are ready for it) belong to the services that consume this database.
@@ -362,13 +397,14 @@ F1 Kaggle, F6, F7 APIs ─────┘
 
 ```
 catalog/        catalog.json (pinned copy of the shared catalog)
+data/           local_events.csv (F6b, loaded by `seed events`)
 sql/            schema.sql, indexes.sql, functions.sql, reset.sql
 seed/           Python package (python -m seed)
 test/           unit + database tests (test_booking.py: reservar() and friends)
 DEPLOYMENT.md   Neon: load, roles, connections, simulator
 Readmeexe.md    quick guide in Spanish: run everything on Neon with Docker
 Dockerfile      seed job image (local and ECS Fargate)
-docker-compose.yml, .env.example, .github/workflows/ci.yml
+docker-compose.yml, .env.example, .github/workflows/ci.yml and cd.yml
 ```
 
 ## Troubleshooting
